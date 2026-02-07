@@ -32,7 +32,7 @@ from src.db import (
 )
 from src.discord_notify import send_discord
 from src.errors import ValidationError
-from src.github_release import delete_asset_if_exists, get_latest_release, upload_asset
+from src.github_release import delete_asset_if_exists, get_or_create_latest_release, upload_asset
 from src.parser import find_target_table, parse_song_table
 from src.scraper import fetch_html
 
@@ -111,7 +111,12 @@ def run() -> None:
         if not settings.github.owner or not settings.github.repo:
             raise ValidationError("github.owner/repo is empty")
 
-        release = get_latest_release(settings.github.owner, settings.github.repo, token)
+        release = get_or_create_latest_release(
+            settings.github.owner,
+            settings.github.repo,
+            token,
+            tag_name=f"v{settings.version}",
+        )
         delete_asset_if_exists(release, settings.github.asset_name, token)
 
         upload_url = release["upload_url"]

@@ -33,29 +33,6 @@ def _github_headers(token: str) -> Dict[str, str]:
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-
-def get_latest_release(owner: str, repo: str, token: str) -> Dict[str, Any]:
-    """
-    対象リポジトリの latest release 情報を取得する。
-
-    Args:
-        owner: GitHub owner名
-        repo: GitHub repository名
-        token: GitHub API用トークン
-
-    Returns:
-        latest release のJSONレスポンス（dict）。
-
-    Raises:
-        GithubReleaseError: latest release の取得に失敗した場合。
-    """
-    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
-    r = requests.get(url, headers=_github_headers(token), timeout=30)
-    if r.status_code != 200:
-        raise GithubReleaseError(f"Failed to get latest release: {r.status_code} {r.text}")
-    return r.json()
-
-
 def delete_asset_if_exists(release: Dict[str, Any], asset_name: str, token: str) -> None:
     """
     Release内に同名のassetが存在する場合、それを削除する。
@@ -106,3 +83,65 @@ def upload_asset(upload_url: str, asset_name: str, file_path: str, token: str) -
     r = requests.post(url, headers=headers, data=data, timeout=60)
     if r.status_code not in (200, 201):
         raise GithubReleaseError(f"Failed to upload asset: {r.status_code} {r.text}")
+
+def create_release(owner: str, repo: str, token: str, tag_name: str) -> Dict[str, Any]:
+    """
+    GitHub Release を新規作成する。
+
+    Args:
+        owner: GitHub owner名
+        repo: GitHub repository名
+        token: GitHub API用トークン
+        tag_name: 作成するtag名（例: v1.0.0）
+
+    Returns:
+        作成されたreleaseのJSONレスポンス（dict）。
+
+    Raises:
+        GithubReleaseError: release作成に失敗した場合。
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases"
+
+    payload = {
+        "tag_name": tag_name,
+        "name": tag_name,
+        "draft": False,
+        "prerelease": False,
+        "generate_release_notes": False,
+    }
+
+    r = requests.post(url, headers=_github_headers(token), json=payload, timeout=30)
+    if r.status_code not in (200, 201):
+        raise GithubReleaseError(f"Failed to create release: {r.status_code} {r.text}")
+
+    return r.json()
+
+
+def get_or_create_latest_release(
+    owner: str, repo: str, token: str, tag_name: str
+) -> Dict[str, Any]:
+    """
+    latest release を取得する。存在しない(404)場合は新規作成する。
+
+    Args:
+        owner: GitHub owner名
+        repo: GitHub repository名
+        token: GitHub API用トークン
+        tag_name: releaseが無い場合に作成するtag名
+
+    Returns:
+        latest release のJSONレスポンス（dict）。
+
+    Raises:
+        GithubReleaseError: 404以外で latest release 取得に失敗した場合。
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    r = requests.get(url, headers=_github_headers(token), timeout=30)
+
+    if r.status_code == 200:
+        return r.json()
+
+    if r.status_code == 404:
+        return create_release(owner, repo, token, tag_name)
+
+    raise GithubReleaseError(f"Failed to get latest release: {r.status_code} {r.text}")
