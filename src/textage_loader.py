@@ -15,6 +15,7 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     JavaScriptのオブジェクト表記をJSONに変換する際に、以下の処理を行う:
     - シングルクォートをダブルクォートに変換
     - 配列内の裸の16進数値(A-F)をダブルクォートで囲む
+    - JavaScriptのコメントとメソッド呼び出しを削除
     Args:
         js_text (str): JavaScriptのソースコード全体
         varname (str): 抽出対象のオブジェクト変数名
@@ -39,10 +40,27 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     obj_text = m2.group(1)
 
     # JS -> JSON化
-    # keyは 'xxx': の形式なので "xxx": にする
+    # 1. JavaScriptのコメント（//...）を削除
+    obj_text = re.sub(r"//[^\n]*\n", "\n", obj_text)
+
+    # 2. .fontcolor(...) などのメソッド呼び出しを削除
+    obj_text = re.sub(r'\.fontcolor\([^)]*\)', '', obj_text)
+
+    # 3. キーのシングルクォートを置き換え
+    # パターン: 'key': を "key": に（キー内にエスケープされたクォートを含むかもしれない）
+    def replace_key(match):
+        key = match.group(1)
+        # キー内のエスケープされたシングルクォート（\'）をダブルクォートに置き換え
+        key = key.replace("\\'", '"')
+        return f'"{key}":'
+
+    obj_text = re.sub(r"'((?:[^'\\]|\\.)*)'(\s*):", replace_key, obj_text)
+
+    # 4. 残っているシングルクォートをダブルクォートに置き換え
+    # （値内のシングルクォート）
     obj_text = re.sub(r"\'", '"', obj_text)
 
-    # actbl.js は A,B,C,F などが裸で入っているので "A" に変換
+    # 5. actbl.js は A,B,C,F などが裸で入っているので "A" に変換
     # 例: [3,0,0,3,1,6,7,A,7,C,...]
     obj_text = re.sub(r"(?<=,)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=\[)([A-F])(?=,)", r'"\1"', obj_text)
