@@ -168,7 +168,16 @@ def ensure_schema(conn: sqlite3.Connection):
         FOREIGN KEY(music_id) REFERENCES music(music_id)
     );
     """)
+    
+    # インデックス追加: chart(music_id, is_active)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_chart_music_active ON chart(music_id, is_active);")
 
+    # インデックス追加: chart(play_style, difficulty, level, is_active)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_chart_filter ON chart(play_style, difficulty, level, is_active);")
+
+    # インデックス追加: chart(is_active, notes)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_chart_notes_active ON chart(is_active, notes);")
+    
     conn.commit()
 
 
