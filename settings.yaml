@@ -1,8 +1,5 @@
 version: 33
 
-new_song_url: "https://bemaniwiki.com/?beatmania+IIDX+33+Sparkle+Shower/%BF%B7%B6%CA%A5%EA%A5%B9%A5%C8"
-old_song_url: "https://bemaniwiki.com/?beatmania+IIDX+33+Sparkle+Shower/%B5%EC%B6%CA%A5%EA%A5%B9%A5%C8"
-
 output_db_path: "song_master.sqlite"
 
 github:

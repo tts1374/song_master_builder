@@ -10,6 +10,11 @@ Textageの以下3ファイルから取得したデータを元に、SQLiteへ登
 本モジュールは、曲情報(musicテーブル)と譜面情報(chartテーブル)を
 Upsert(存在すれば更新、無ければ追加)することでDBを最新状態に保つ。
 
+追加仕様:
+- latest release の sqlite をDLして利用可能にする
+- 更新開始前に music.is_ac_active / is_inf_active を全件0にリセットし、
+  Textageで取得できた曲のみ再度フラグを立てる（Textageに無い曲は未収録扱い）
+
 想定仕様:
 - musicの同一判定は textage_id を用いる
 - chartの同一判定は (music_id, play_style, difficulty) を用いる
@@ -19,6 +24,8 @@ Upsert(存在すれば更新、無ければ追加)することでDBを最新状�
 import sqlite3
 import re
 import html
+import os
+import requests
 from datetime import datetime, timezone
 
 
@@ -33,12 +40,6 @@ def normalize_textage_string(s: str) -> str:
     - HTML文字実体参照のデコード (例: &#332; -> Ō)
     - HTMLタグ除去 (例: <br>, <span ...> 等)
     - 空白の正規化
-
-    Args:
-        s (str): Textage由来文字列
-
-    Returns:
-        str: 正規化後文字列
     """
     if s is None:
         return ""
@@ -58,18 +59,11 @@ def normalize_textage_string(s: str) -> str:
 
 
 def now_iso() -> str:
-    """
-    現在のUTC時刻をISO 8601形式の文字列で返す。
-
-    Returns:
-        str: ISO 8601形式でフォーマットされた現在のUTC時刻
-    """
+    """現在のUTC時刻をISO 8601形式で返す。"""
     return datetime.now(timezone.utc).isoformat()
 
 
 # chart登録対象の譜面種別一覧。
-# typeは textage(datatable/actbl) のインデックスに対応する。
-# act_indexはactbl上の該当レベル位置(参考情報、コード上は type*2+1 を使用する)。
 CHART_TYPES = [
     # (type, play_style, difficulty, act_index)
     (1, "SP", "BEGINNER", 3),
@@ -84,19 +78,64 @@ CHART_TYPES = [
 ]
 
 
+def download_latest_sqlite_from_release(
+    owner: str,
+    repo: str,
+    sqlite_path: str,
+    token: str | None = None,
+    asset_name: str = "song_master.sqlite",
+) -> bool:
+    """
+    GitHub Releases の latest release から sqlite asset をダウンロードする。
+
+    Returns:
+        bool: ダウンロード成功ならTrue。latestが無い/assetが無い場合はFalse。
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    r = requests.get(url, headers=headers, timeout=30)
+
+    # releaseが無い場合
+    if r.status_code == 404:
+        return False
+
+    r.raise_for_status()
+    data = r.json()
+
+    assets = data.get("assets", [])
+    target = None
+    for a in assets:
+        if a.get("name") == asset_name:
+            target = a
+            break
+
+    if not target:
+        return False
+
+    download_url = target.get("browser_download_url")
+    if not download_url:
+        return False
+
+    r2 = requests.get(download_url, timeout=60)
+    r2.raise_for_status()
+
+    os.makedirs(os.path.dirname(sqlite_path) or ".", exist_ok=True)
+    with open(sqlite_path, "wb") as f:
+        f.write(r2.content)
+
+    return True
+
+
 def ensure_schema(conn: sqlite3.Connection):
-    """
-    データベーススキーマを初期化する関数。
-
-    musicテーブルとchartテーブルを作成し、データベースの構造を整える。
-    既にテーブルが存在する場合は作成処理はスキップされる。
-
-    Args:
-        conn (sqlite3.Connection): SQLiteデータベース接続オブジェクト
-    """
+    """DBスキーマを初期化する。"""
     cur = conn.cursor()
 
-    # 曲情報テーブル
     cur.execute("""
     CREATE TABLE IF NOT EXISTS music (
         music_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +152,6 @@ def ensure_schema(conn: sqlite3.Connection):
     );
     """)
 
-    # 譜面情報テーブル
     cur.execute("""
     CREATE TABLE IF NOT EXISTS chart (
         chart_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +172,26 @@ def ensure_schema(conn: sqlite3.Connection):
     conn.commit()
 
 
+def reset_all_music_active_flags(conn: sqlite3.Connection):
+    """
+    musicテーブルの収録フラグを全件0に戻す。
+
+    Textage取得結果に無い曲は未収録扱いにしたいので、
+    build開始前に必ず呼ぶ。
+    """
+    cur = conn.cursor()
+    now = now_iso()
+
+    cur.execute("""
+    UPDATE music SET
+        is_ac_active = 0,
+        is_inf_active = 0,
+        updated_at = ?
+    """, (now,))
+
+    conn.commit()
+
+
 def upsert_music(
     conn: sqlite3.Connection,
     textage_id: str,
@@ -144,33 +202,13 @@ def upsert_music(
     is_ac_active: int,
     is_inf_active: int
 ) -> int:
-    """
-    musicテーブルに対してUpsertを行う。
-
-    textage_id を一意キーとして、存在しなければINSERT、存在すればUPDATEする。
-    created_at は新規登録時のみ設定し、更新時は保持する。
-
-    Args:
-        conn (sqlite3.Connection): SQLiteデータベース接続
-        textage_id (str): Textage恒久ID（同一判定キー）
-        version (str): バージョン番号（例: "33"）
-        title (str): タイトル
-        artist (str): アーティスト
-        genre (str): ジャンル
-        is_ac_active (int): AC収録フラグ (0/1)
-        is_inf_active (int): INFINITAS収録フラグ (0/1)
-
-    Returns:
-        int: 対象musicのmusic_id
-    """
+    """musicテーブルに対してUpsertを行う。"""
     cur = conn.cursor()
     now = now_iso()
 
-    # 既存データ検索
     cur.execute("SELECT music_id, created_at FROM music WHERE textage_id = ?", (textage_id,))
     row = cur.fetchone()
 
-    # 新規登録
     if row is None:
         cur.execute("""
         INSERT INTO music (
@@ -186,7 +224,6 @@ def upsert_music(
         ))
         return cur.lastrowid
 
-    # 更新
     music_id = row[0]
     cur.execute("""
     UPDATE music SET
@@ -217,21 +254,7 @@ def upsert_chart(
     notes: int,
     is_active: int
 ):
-    """
-    chartテーブルに対してUpsertを行う。
-
-    (music_id, play_style, difficulty) を一意キーとして
-    存在しなければINSERT、存在すればUPDATEする。
-
-    Args:
-        conn (sqlite3.Connection): SQLiteデータベース接続
-        music_id (int): musicテーブルの内部ID
-        play_style (str): SP/DP
-        difficulty (str): BEGINNER/NORMAL/HYPER/ANOTHER/LEGGENDARIA
-        level (int): 譜面レベル（数値）
-        notes (int): ノーツ数
-        is_active (int): 有効フラグ (0/1)
-    """
+    """chartテーブルに対してUpsertを行う。"""
     cur = conn.cursor()
     now = now_iso()
 
@@ -241,7 +264,6 @@ def upsert_chart(
     """, (music_id, play_style, difficulty))
     row = cur.fetchone()
 
-    # 新規登録
     if row is None:
         cur.execute("""
         INSERT INTO chart (
@@ -257,7 +279,6 @@ def upsert_chart(
         ))
         return
 
-    # 更新
     cur.execute("""
     UPDATE chart SET
         level = ?,
@@ -277,42 +298,32 @@ def build_or_update_sqlite(
     sqlite_path: str,
     titletbl: dict,
     datatbl: dict,
-    actbl: dict
+    actbl: dict,
+    reset_flags: bool = True
 ) -> dict:
     """
     Textageデータを元にSQLite DBを生成または更新する。
 
-    titletblを起点として全曲を走査し、datatbl/actblが揃っている曲のみを処理する。
-    musicテーブルを更新後、CHART_TYPES定義に従いchartテーブルも更新する。
-
-    Args:
-        sqlite_path (str): SQLiteファイルパス
-        titletbl (dict): titletbl.jsから抽出した辞書
-        datatbl (dict): datatbl.jsから抽出した辞書
-        actbl (dict): actbl.jsから抽出した辞書
-
-    Returns:
-        dict: 処理件数情報
-            - music_processed: music処理件数
-            - chart_processed: chart処理件数
-            - ignored: datatbl/actbl不足による無視件数
+    reset_flags=True の場合、build開始前に
+    music.is_ac_active / is_inf_active を全件0にする。
     """
     conn = sqlite3.connect(sqlite_path)
     conn.row_factory = sqlite3.Row
 
     ensure_schema(conn)
 
+    if reset_flags:
+        reset_all_music_active_flags(conn)
+
     music_processed = 0
     chart_processed = 0
     ignored = 0
 
     for tag, row in titletbl.items():
-        # datatbl/actblが無い曲は処理対象外とする
         if tag not in datatbl or tag not in actbl:
             ignored += 1
             continue
 
-        # titletbl: [version, textage_id, opt?, genre, artist, title, subtitle?]
         version_raw = str(row[0])
 
         # versionの -35 → SS は適用済み
@@ -332,9 +343,6 @@ def build_or_update_sqlite(
             if subtitle:
                 title = f"{title} {subtitle}"
 
-        # actbl[tag][0] はフラグ領域（16進数文字列または整数値）
-        # bit0: AC収録
-        # bit1: INFINITAS収録
         value = actbl[tag][0]
         if isinstance(value, int):
             flags = value
@@ -344,7 +352,6 @@ def build_or_update_sqlite(
         is_ac_active = 1 if (flags & 0x01) else 0
         is_inf_active = 1 if (flags & 0x02) else 0
 
-        # musicをUpsert
         music_id = upsert_music(
             conn,
             textage_id=textage_id,
@@ -357,12 +364,8 @@ def build_or_update_sqlite(
         )
         music_processed += 1
 
-        # chartをUpsert
         for t, play_style, difficulty, _ in CHART_TYPES:
-            # datatbl: ノーツ数
             notes = datatbl[tag][t]
-
-            # actbl: 譜面レベル (16進数表記の文字列 or int)
             lv_hex = actbl[tag][t * 2 + 1]
 
             if isinstance(lv_hex, int):
@@ -370,7 +373,6 @@ def build_or_update_sqlite(
             else:
                 lv_int = int(str(lv_hex), 16)
 
-            # レベルが0の場合は譜面無し扱い（無効）
             is_active = 1 if lv_int > 0 else 0
 
             upsert_chart(
