@@ -276,7 +276,14 @@ def build_or_update_sqlite(
             continue
 
         # titletbl: [version, textage_id, opt?, genre, artist, title, subtitle?]
-        version = str(row[0])
+        version_raw = str(row[0])
+
+        # textage_loader側で SS=35 を -35 に変換しているため、
+        # -35 は SS として扱いDBへ登録する
+        if version_raw == "-35":
+            version = "SS"
+        else:
+            version = version_raw
         textage_id = str(row[1])
         genre = str(row[3])
         artist = str(row[4])

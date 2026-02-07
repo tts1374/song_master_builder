@@ -72,9 +72,13 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     # JS -> JSON化
     # 1) ファイル先頭に定義される定数 (例: SS=35) を抽出してオブジェクト内で置換
     consts = dict(re.findall(r"([A-Z_][A-Z0-9_]*)\s*=\s*([0-9]+)\s*;", js_text))
+
+    # SS のような定数は将来の通常バージョン番号と衝突する可能性があるため、
+    # 正の値ではなく負数に変換して扱う
     if consts:
         for name, val in consts.items():
-            obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", val, obj_text)
+            neg_val = f"-{val}"
+            obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", neg_val, obj_text)
 
     # 2) JavaScriptのコメント（//...）を削除
     obj_text = re.sub(r"//[^\n]*\n", "\n", obj_text)
@@ -113,22 +117,25 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     # titletbl のみ特別な処理（定数置換後にエントリを個別に抽出・パース）
     if varname == "titletbl":
         res = {}
-        # 定数を置換（SS=35など）
+
+        # 定数を負数に置換（SS=35 → -35）
         for name, val in consts.items():
-            obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", val, obj_text)
-        
-        # 正規表現で各エントリを抽出: 'key': [...] または "key": [...]
+            neg_val = f"-{val}"
+            obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", neg_val, obj_text)
+
         entry_re = re.compile(r"['\"]([^'\"]+)['\"]\s*:\s*(\[[^\]]*\])", flags=re.S)
         for key, arr_text in entry_re.findall(obj_text):
             try:
                 arr = json.loads(arr_text)
-                # arr[0] を文字列化
+
+                # arr[0] は version のため、文字列として格納する
                 if isinstance(arr, list) and len(arr) > 0:
                     arr[0] = str(arr[0])
+
                 res[key] = arr
             except json.JSONDecodeError:
-                # パース失敗は無視
                 continue
+
         return res
 
     # その他のテーブル（datatbl, actbl）は元の処理で対応
