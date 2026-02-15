@@ -205,17 +205,22 @@ jobs:
           settings = yaml.safe_load(pathlib.Path("settings.yaml").read_text(encoding="utf-8"))
           owner = settings["github"]["owner"]
           repo = settings["github"]["repo"]
+          output_db_path = settings.get("output_db_path", "song_master.sqlite")
+          output_base = pathlib.Path(output_db_path)
+          output_dir = output_base.parent if str(output_base.parent) not in {"", "."} else pathlib.Path(".")
 
-          latest_path = pathlib.Path("latest.json")
+          latest_path = output_dir / "latest.json"
           if not latest_path.exists():
-              raise RuntimeError("公開失敗: latest.json が存在しません")
+              print(f"skip publish: latest.json が未生成です ({latest_path})")
+              print("build が skip された可能性があるため、公開処理をスキップします。")
+              raise SystemExit(0)
 
           manifest = json.loads(latest_path.read_text(encoding="utf-8"))
           sqlite_name = manifest.get("file_name")
           if not sqlite_name:
               raise RuntimeError("公開失敗: latest.json に file_name がありません")
 
-          sqlite_path = pathlib.Path(sqlite_name)
+          sqlite_path = output_dir / sqlite_name
           if not sqlite_path.exists():
               raise RuntimeError(f"公開失敗: SQLite が存在しません: {sqlite_name}")
 
