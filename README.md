@@ -1,8 +1,10 @@
 # iidx_all_songs_master
 
-beatmania IIDX の楽曲データを Textage から取得し、  
-大会・エビデンス管理システム等で利用するための  
-**曲マスタ SQLite を生成・配布するプロジェクト**です。
+beatmania IIDX の楽曲データを Textage から取得し、
+
+beatmania IIDX楽曲を用いたシステム等で利用するための
+
+**曲マスタ SQLite を生成・GitHub Releases で配布するプロジェクト**です。
 
 ---
 
@@ -13,24 +15,55 @@ beatmania IIDX の楽曲データを Textage から取得し、
 - Textage からの楽曲情報取得
 - 正規化済み検索キー付き SQLite 生成
 - `chart_id` 永続保証
+- 日付タグによるバージョン管理
 - バージョン付き SQLite 出力
 - `latest.json` メタ生成
 - CI による整合性・互換性検証
 
 ---
 
+# リリースポリシー
+
+## タグ運用
+
+- GitHub Releases は **日付タグ（YYYY-MM-DD）** で管理します。
+- データ内容に変更があった場合は、必ず新しいタグ・新しい Release を作成します。
+- 既存タグの移動・上書きは行いません。
+- 同日に複数回リリースする場合は `YYYY-MM-DD.N` を使用します。
+
+例:
+
+```
+2026-02-152026-02-15.2
+```
+
+## バージョンの正
+
+- タグ名がリリース識別子です。
+- 実際の生成時刻は `latest.json.generated_at`（UTC）を正とします。
+- 配布物の同一性は `sha256` によって保証されます。
+
+---
+
 # 出力物
 
-生成される成果物は以下の2つです。
+各 Release には以下の2つが含まれます。
 
-```text
-song_master_<version>.sqlite
+```
+song_master_<tag>.sqlite
 latest.json
 ```
 
-## song_master_<version>.sqlite
+## song_master_<tag>.sqlite
 
-- バージョン付きファイル名（固定名上書きなし）
+例:
+
+```
+song_master_2026-02-15.sqlite
+```
+
+- タグと同一の日付を含むファイル名
+- 固定名上書きは行わない
 - 読み取り専用前提
 - 既存キーに対する `chart_id` 永続保証
 
@@ -56,6 +89,7 @@ latest.json
 用途:
 
 - クライアントが最新版を検出するためのメタ情報
+- 配布物の整合性検証（sha256 / byte_size）
 - Textage ソース更新有無の判定（ハッシュ比較）
 
 ---
@@ -107,6 +141,8 @@ latest.json
 4. Unicode 分解（NFD）→ 結合文字除去
 5. 連続空白圧縮
 
+---
+
 ## chart
 
 | column       | type           | note |
@@ -157,50 +193,32 @@ latest.json
 
 に対して `chart_id` は将来の生成でも変更されません。
 
-CI で前回リリースとの比較検証を行い、  
+CI で直近の公開 Release と比較検証を行い、
+
 不一致があればビルドは失敗します。
 
 ---
 
 # スキップ条件（Textage未更新）
 
-前回 `latest.json` の `source_hashes` と、今回取得した  
-`titletbl.js` / `datatbl.js` / `actbl.js` の SHA-256 がすべて一致した場合、  
-生成処理はスキップされます。
+前回 Release の `latest.json.source_hashes` と、
 
----
+今回取得した `titletbl.js` / `datatbl.js` / `actbl.js` の SHA-256 がすべて一致した場合、
 
-# セットアップ
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-# 実行
-
-```bash
-python main.py
-```
-
-生成後:
-
-- SQLite 出力
-- latest.json 出力
-- 整合性チェック実行
+生成処理および新規 Release 作成は行いません。
 
 ---
 
 # CIフロー概要
 
-1. 前回リリース成果物取得
+1. 直近の公開 Release 取得
 2. Textage 取得 + ハッシュ比較
 3. SQLite 生成（必要時のみ）
 4. スキーマ・整合性チェック
-5. 前回リリースとの `chart_id` 比較
+5. 前回 Release との `chart_id` 比較
 6. `latest.json` 生成
-7. 成果物公開
+7. 日付タグで新規 Release 作成
+8. 成果物アップロード
 
 ---
 
@@ -210,19 +228,20 @@ python main.py
 - `textage_id` を曲の唯一識別子とする
 - スキーマ変更時は `schema_version` を更新する
 - `title_search_key` 生成仕様変更は破壊的変更として扱う
+- 既存タグの再利用・移動は禁止
 
 ---
 
 # 注意事項
 
 - Textage 構造変更時はパーサ修正が必要
-- `chart_id` を振り直すような変更は禁止
-- 生成物は必ず検証を通してから公開すること
+- `chart_id` を振り直す変更は禁止
+- 生成物は検証を通過したもののみ Release する
 
 ---
 
 # ライセンス
 
-本プロジェクトは個人利用目的です。  
-配布データの利用は自己責任で行ってください。
+本プロジェクトは個人利用目的です。
 
+配布データの利用は自己責任で行ってください。
