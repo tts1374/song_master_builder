@@ -171,6 +171,8 @@ jobs:
           github_cfg = settings.setdefault("github", {})
           github_cfg["upload_to_release"] = False
           settings["chart_id_missing_policy"] = "warn"
+          settings["bemaniwiki_source_mode"] = "file"
+          settings["bemaniwiki_source_file_path"] = "tests/fixtures/bemaniwiki_title_alias.html"
           if os.environ.get("BASELINE_BOOTSTRAP") == "1":
               github_cfg["require_previous_release"] = False
               print("bootstrap mode enabled: require_previous_release=false")

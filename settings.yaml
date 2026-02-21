@@ -1,6 +1,13 @@
 output_db_path: "song_master.sqlite"
 schema_version: "33"
 chart_id_missing_policy: "error"
+bemaniwiki_title_alias_url: "https://bemaniwiki.com/?beatmania+IIDX+33+Sparkle+Shower/%B6%CA%CC%BE%C9%BD%B5%AD%A4%CB%A4%C4%A4%A4%A4%C6"
+bemaniwiki_http_timeout_sec: 20
+bemaniwiki_user_agent: "iidx-all-songs-master/1.0"
+bemaniwiki_cache_path: "cache/bemaniwiki_title_alias.html"
+bemaniwiki_source_mode: "online"
+bemaniwiki_source_file_path: ""
+bemaniwiki_online_failure_mode: "fail_fast"
 
 github:
   owner: "tts1374"

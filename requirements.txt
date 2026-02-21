@@ -1,4 +1,5 @@
 requests==2.32.3
 beautifulsoup4==4.12.3
+charset-normalizer==3.4.1
 PyYAML==6.0.2
 pytest==8.3.4

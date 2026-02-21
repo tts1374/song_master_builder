@@ -13,6 +13,13 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from src.config import BemaniWikiAliasConfig
+from src.generator.alias_seed_official import reset_music_title_aliases, seed_official_aliases
+from src.generator.alias_seed_wiki import seed_wiki_aliases
+from src.verify.alias_verify import verify_music_title_alias_integrity
+from src.wiki.bemaniwiki_fetch import load_bemaniwiki_title_alias_html
+from src.wiki.bemaniwiki_parse_title_alias import parse_bemaniwiki_title_alias_table
+
 TAG_RE = re.compile(r"<[^>]+>")
 SPACE_RE = re.compile(r"\s+")
 
@@ -97,6 +104,11 @@ def normalize_title_search_key(title: str) -> str:
 def now_iso() -> str:
     """現在のJST時刻を ISO 8601 形式で返す。"""
     return datetime.now(JST).isoformat()
+
+
+def now_utc_iso() -> str:
+    """Return current UTC timestamp in ISO8601 with Z suffix."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 CHART_TYPES = [
@@ -244,6 +256,20 @@ def ensure_schema(conn: sqlite3.Connection):
     """
     )
 
+    cur.execute(
+        """
+    CREATE TABLE IF NOT EXISTS music_title_alias (
+        alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        textage_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        alias_type TEXT NOT NULL CHECK(alias_type IN ('official', 'csv_wiki', 'manual')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(textage_id) REFERENCES music(textage_id)
+    );
+    """
+    )
+
     if _table_exists(conn, "music") and not _column_exists(
         conn, "music", "title_search_key"
     ):
@@ -266,6 +292,18 @@ def ensure_schema(conn: sqlite3.Connection):
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_music_title_search_key "
         "ON music(title_search_key);"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_music_title_alias_alias "
+        "ON music_title_alias(alias);"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_music_title_alias_textage_id "
+        "ON music_title_alias(textage_id);"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_music_title_alias_textage_alias "
+        "ON music_title_alias(textage_id, alias);"
     )
 
     conn.commit()
@@ -303,6 +341,98 @@ def reset_all_music_active_flags(conn: sqlite3.Connection):
     )
 
     conn.commit()
+
+
+def rebuild_music_title_aliases(
+    conn: sqlite3.Connection,
+    bemaniwiki_alias_config: BemaniWikiAliasConfig | None,
+) -> dict:
+    """Rebuild `music_title_alias` from official titles and optional wiki conversion table."""
+    alias_timestamp = now_utc_iso()
+    reset_music_title_aliases(conn)
+    official_count = seed_official_aliases(conn, alias_timestamp)
+
+    parse_report = None
+    seed_report = None
+    source = None
+    encoding = None
+    replacement_count = 0
+
+    if bemaniwiki_alias_config is not None:
+        document = load_bemaniwiki_title_alias_html(bemaniwiki_alias_config)
+        source = document.source
+        encoding = document.encoding
+        replacement_count = document.replacement_char_count
+
+        wiki_rows, parse_report = parse_bemaniwiki_title_alias_table(document.html_text)
+        seed_report = seed_wiki_aliases(
+            conn=conn,
+            wiki_rows=wiki_rows,
+            now_utc_iso=alias_timestamp,
+            unresolved_official_title_fail_threshold=(
+                bemaniwiki_alias_config.unresolved_official_title_fail_threshold
+            ),
+        )
+
+        unresolved_count = len(seed_report.unresolved_official_titles)
+        unresolved_sample = list(seed_report.unresolved_official_titles[:10])
+        print(
+            "[alias/wiki] table_selected="
+            f"{parse_report.selected_table_index} scanned={parse_report.tables_scanned} "
+            f"matched={parse_report.matched_tables}"
+        )
+        print(
+            "[alias/wiki] rows total="
+            f"{parse_report.parsed_rows_total} definitions={parse_report.definition_rows} "
+            f"skipped={parse_report.skipped_rows_by_reason}"
+        )
+        print(
+            "[alias/wiki] source="
+            f"{source} encoding={encoding} replacements={replacement_count}"
+        )
+        print(
+            "[alias/wiki] unresolved_official_titles_count="
+            f"{unresolved_count} sample={unresolved_sample}"
+        )
+        print(
+            "[alias/wiki] inserted_csv_wiki_alias_count="
+            f"{seed_report.inserted_csv_wiki_alias_count} "
+            f"dedup_skipped_count={seed_report.dedup_skipped_count} "
+            "max_csv_wiki_candidates_per_song="
+            f"{seed_report.max_csv_wiki_candidates_per_song}"
+        )
+
+    verify_summary = verify_music_title_alias_integrity(conn)
+    return {
+        "official_alias_count": official_count,
+        "wiki_source": source,
+        "wiki_encoding": encoding,
+        "wiki_decode_replacement_count": replacement_count,
+        "wiki_parsed_rows_total": (
+            parse_report.parsed_rows_total if parse_report is not None else 0
+        ),
+        "wiki_definition_rows": (
+            parse_report.definition_rows if parse_report is not None else 0
+        ),
+        "wiki_skipped_rows_by_reason": (
+            parse_report.skipped_rows_by_reason if parse_report is not None else {}
+        ),
+        "unresolved_official_titles_count": (
+            len(seed_report.unresolved_official_titles) if seed_report is not None else 0
+        ),
+        "unresolved_official_titles_sample": (
+            list(seed_report.unresolved_official_titles[:10]) if seed_report is not None else []
+        ),
+        "inserted_csv_wiki_alias_count": (
+            seed_report.inserted_csv_wiki_alias_count if seed_report is not None else 0
+        ),
+        "dedup_skipped_count": seed_report.dedup_skipped_count if seed_report is not None else 0,
+        "max_csv_wiki_candidates_per_song": (
+            seed_report.max_csv_wiki_candidates_per_song if seed_report is not None else 0
+        ),
+        "alias_music_count": verify_summary.music_count,
+        "alias_official_count": verify_summary.official_alias_count,
+    }
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
@@ -460,12 +590,14 @@ def build_or_update_sqlite(
     reset_flags: bool = True,
     schema_version: str = "1",
     asset_updated_at: str | None = None,
+    bemaniwiki_alias_config: BemaniWikiAliasConfig | None = None,
 ) -> dict:
     """
     Textage テーブルから SQLite DB を構築または更新する。
     """
     conn = sqlite3.connect(sqlite_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
 
     ensure_schema(conn)
 
@@ -528,6 +660,11 @@ def build_or_update_sqlite(
             )
             chart_processed += 1
 
+    alias_report = rebuild_music_title_aliases(
+        conn=conn,
+        bemaniwiki_alias_config=bemaniwiki_alias_config,
+    )
+
     asset_value = asset_updated_at or now_iso()
     upsert_meta(
         conn,
@@ -543,4 +680,9 @@ def build_or_update_sqlite(
         "music_processed": music_processed,
         "chart_processed": chart_processed,
         "ignored": ignored,
+        "official_alias_count": alias_report["official_alias_count"],
+        "inserted_csv_wiki_alias_count": alias_report["inserted_csv_wiki_alias_count"],
+        "unresolved_official_titles_count": alias_report[
+            "unresolved_official_titles_count"
+        ],
     }

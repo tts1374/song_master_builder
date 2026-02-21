@@ -93,6 +93,13 @@ def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
     try:
         assert conn.execute("SELECT COUNT(*) FROM music;").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM chart;").fetchone()[0] == len(CHART_TYPES)
+        assert conn.execute("SELECT COUNT(*) FROM music_title_alias;").fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM music_title_alias WHERE alias_type='official';"
+            ).fetchone()[0]
+            == 1
+        )
     finally:
         conn.close()
 
@@ -142,6 +149,35 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
             """
         ).fetchone()
         assert idx is not None
+
+        alias_cols = {
+            row[1]: row for row in conn.execute("PRAGMA table_info(music_title_alias);").fetchall()
+        }
+        assert "textage_id" in alias_cols
+        assert "alias" in alias_cols
+        assert "alias_type" in alias_cols
+        assert alias_cols["textage_id"][3] == 1
+        assert alias_cols["alias"][3] == 1
+        assert alias_cols["alias_type"][3] == 1
+
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='uq_music_title_alias_alias';
+            """
+        ).fetchone() is not None
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='idx_music_title_alias_textage_id';
+            """
+        ).fetchone() is not None
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='uq_music_title_alias_textage_alias';
+            """
+        ).fetchone() is not None
     finally:
         conn.close()
 

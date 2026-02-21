@@ -25,6 +25,7 @@ from src.build_validation import (
     validate_latest_manifest,
     write_latest_manifest,
 )
+from src.config import load_bemaniwiki_alias_config
 from src.discord_notify import send_discord_message
 from src.github_release import (
     download_asset,
@@ -159,6 +160,7 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
     """生成・検証・公開までのビルドフローを実行する。"""
     try:
         settings = load_settings("settings.yaml")
+        bemaniwiki_alias_config = load_bemaniwiki_alias_config(settings)
 
         output_db_path = settings.get("output_db_path", "song_master.sqlite")
         schema_version = str(settings.get("schema_version", "1"))
@@ -245,6 +247,7 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 reset_flags=True,
                 schema_version=schema_version,
                 asset_updated_at=previous_asset_updated_at,
+                bemaniwiki_alias_config=bemaniwiki_alias_config,
             )
 
             validate_db_schema_and_data(
@@ -291,6 +294,9 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 f"- music_processed: {result['music_processed']}",
                 f"- chart_processed: {result['chart_processed']}",
                 f"- ignored: {result['ignored']}",
+                f"- official_alias_count: {result['official_alias_count']}",
+                f"- csv_wiki_alias_count: {result['inserted_csv_wiki_alias_count']}",
+                f"- unresolved_wiki_titles: {result['unresolved_official_titles_count']}",
                 f"- chart_id_checked: {'yes' if chart_check else 'no'}",
                 f"- generated_at: {manifest['generated_at']}",
                 f"- sha256: {manifest['sha256']}",

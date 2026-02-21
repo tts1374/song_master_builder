@@ -56,6 +56,14 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
         chart_sql_norm = _normalize_sql(chart_sql[0])
         assert "unique(music_id, play_style, difficulty)" in chart_sql_norm
 
+        alias_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='music_title_alias';"
+        ).fetchone()
+        assert alias_sql is not None
+        alias_sql_norm = _normalize_sql(alias_sql[0])
+        assert "alias text not null" in alias_sql_norm
+        assert "alias_type text not null" in alias_sql_norm
+
         music_cols = {row[1]: row for row in conn.execute("PRAGMA table_info(music);").fetchall()}
         assert music_cols["textage_id"][3] == 1
         assert music_cols["title_search_key"][3] == 1
@@ -67,6 +75,24 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
             """
         ).fetchone()
         assert idx is not None
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='uq_music_title_alias_alias';
+            """
+        ).fetchone() is not None
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='idx_music_title_alias_textage_id';
+            """
+        ).fetchone() is not None
+
+        music_count = conn.execute("SELECT COUNT(*) FROM music;").fetchone()[0]
+        official_alias_count = conn.execute(
+            "SELECT COUNT(*) FROM music_title_alias WHERE alias_type='official';"
+        ).fetchone()[0]
+        assert music_count == official_alias_count
     finally:
         conn.close()
 
