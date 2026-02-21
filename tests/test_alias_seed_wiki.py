@@ -15,7 +15,13 @@ from src.wiki.bemaniwiki_parse_title_alias import WikiAliasRow, parse_bemaniwiki
 FIXTURE_PATH = Path("tests/fixtures/bemaniwiki_title_alias.html")
 
 
-def _insert_music(conn: sqlite3.Connection, textage_id: str, title: str):
+def _insert_music(
+    conn: sqlite3.Connection,
+    textage_id: str,
+    title: str,
+    is_ac_active: int = 1,
+    is_inf_active: int = 1,
+):
     upsert_music(
         conn=conn,
         textage_id=textage_id,
@@ -23,8 +29,8 @@ def _insert_music(conn: sqlite3.Connection, textage_id: str, title: str):
         title=title,
         artist="ARTIST",
         genre="GENRE",
-        is_ac_active=1,
-        is_inf_active=1,
+        is_ac_active=is_ac_active,
+        is_inf_active=is_inf_active,
     )
 
 
@@ -146,5 +152,56 @@ def test_seed_wiki_aliases_fails_on_global_alias_collision():
                 ],
                 now_utc_iso="2026-01-01T00:00:00Z",
             )
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_seed_official_aliases_includes_only_active_songs():
+    """Official aliases are created only for songs with AC/INF active flag."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        ensure_schema(conn)
+        _insert_music(conn, "A001", "Song Active", is_ac_active=1, is_inf_active=0)
+        _insert_music(conn, "A002", "Song Inactive", is_ac_active=0, is_inf_active=0)
+        conn.commit()
+
+        reset_music_title_aliases(conn)
+        inserted = seed_official_aliases(conn, "2026-01-01T00:00:00Z")
+        assert inserted == 1
+
+        aliases = conn.execute(
+            "SELECT textage_id, alias FROM music_title_alias ORDER BY textage_id;"
+        ).fetchall()
+        assert aliases == [("A001", "Song Active")]
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_seed_wiki_aliases_ignores_inactive_song_resolution():
+    """Wiki aliases are not resolved against inactive songs."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        ensure_schema(conn)
+        _insert_music(conn, "I001", "Inactive Song", is_ac_active=0, is_inf_active=0)
+        conn.commit()
+
+        reset_music_title_aliases(conn)
+        seed_official_aliases(conn, "2026-01-01T00:00:00Z")
+        report = seed_wiki_aliases(
+            conn=conn,
+            wiki_rows=[
+                WikiAliasRow(
+                    official_title="Inactive Song",
+                    replaced_titles=("Inactive Alias",),
+                    note="",
+                )
+            ],
+            now_utc_iso="2026-01-01T00:00:00Z",
+        )
+
+        assert report.inserted_csv_wiki_alias_count == 0
+        assert report.unresolved_official_titles == ("Inactive Song",)
     finally:
         conn.close()

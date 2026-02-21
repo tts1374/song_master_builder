@@ -39,7 +39,13 @@ def seed_wiki_aliases(
 
     for row in wiki_rows:
         cur.execute(
-            "SELECT textage_id FROM music WHERE title = ? LIMIT 2;",
+            """
+            SELECT textage_id
+            FROM music
+            WHERE title = ?
+              AND (is_ac_active = 1 OR is_inf_active = 1)
+            LIMIT 2;
+            """,
             (row.official_title,),
         )
         matched = cur.fetchall()

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 class AliasVerificationSummary:
     """Post-build alias validation summary."""
 
-    music_count: int
+    active_music_count: int
     official_alias_count: int
     unresolved_official_music_count: int
     orphan_alias_count: int
@@ -20,16 +20,22 @@ def verify_music_title_alias_integrity(conn: sqlite3.Connection) -> AliasVerific
     """Run required alias integrity checks and raise on failure."""
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) FROM music;")
-    music_count = int(cur.fetchone()[0])
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM music
+        WHERE is_ac_active = 1 OR is_inf_active = 1;
+        """
+    )
+    active_music_count = int(cur.fetchone()[0])
 
     cur.execute("SELECT COUNT(*) FROM music_title_alias WHERE alias_type='official';")
     official_alias_count = int(cur.fetchone()[0])
 
-    if official_alias_count != music_count:
+    if official_alias_count != active_music_count:
         raise RuntimeError(
             "official alias count mismatch: "
-            f"music={music_count}, official_alias={official_alias_count}"
+            f"active_music={active_music_count}, official_alias={official_alias_count}"
         )
 
     cur.execute(
@@ -39,7 +45,8 @@ def verify_music_title_alias_integrity(conn: sqlite3.Connection) -> AliasVerific
         LEFT JOIN music_title_alias a
           ON a.textage_id = m.textage_id
          AND a.alias_type = 'official'
-        WHERE a.alias_id IS NULL;
+        WHERE (m.is_ac_active = 1 OR m.is_inf_active = 1)
+          AND a.alias_id IS NULL;
         """
     )
     unresolved_official_music_count = int(cur.fetchone()[0])
@@ -75,7 +82,7 @@ def verify_music_title_alias_integrity(conn: sqlite3.Connection) -> AliasVerific
         raise RuntimeError(f"orphan aliases detected: {orphan_alias_count}")
 
     return AliasVerificationSummary(
-        music_count=music_count,
+        active_music_count=active_music_count,
         official_alias_count=official_alias_count,
         unresolved_official_music_count=unresolved_official_music_count,
         orphan_alias_count=orphan_alias_count,

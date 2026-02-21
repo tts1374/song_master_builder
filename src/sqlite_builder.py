@@ -430,7 +430,7 @@ def rebuild_music_title_aliases(
         "max_csv_wiki_candidates_per_song": (
             seed_report.max_csv_wiki_candidates_per_song if seed_report is not None else 0
         ),
-        "alias_music_count": verify_summary.music_count,
+        "alias_music_count": verify_summary.active_music_count,
         "alias_official_count": verify_summary.official_alias_count,
     }
 

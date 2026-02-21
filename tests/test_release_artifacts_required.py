@@ -88,7 +88,13 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
             """
         ).fetchone() is not None
 
-        music_count = conn.execute("SELECT COUNT(*) FROM music;").fetchone()[0]
+        music_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM music
+            WHERE is_ac_active = 1 OR is_inf_active = 1;
+            """
+        ).fetchone()[0]
         official_alias_count = conn.execute(
             "SELECT COUNT(*) FROM music_title_alias WHERE alias_type='official';"
         ).fetchone()[0]

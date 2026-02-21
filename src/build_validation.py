@@ -169,15 +169,21 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
         if null_count > 0:
             raise RuntimeError(f"title_search_key has {null_count} NULL rows")
 
-        cur.execute("SELECT COUNT(*) FROM music;")
-        music_count = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music
+            WHERE is_ac_active = 1 OR is_inf_active = 1;
+            """
+        )
+        active_music_count = int(cur.fetchone()[0])
 
         cur.execute("SELECT COUNT(*) FROM music_title_alias WHERE alias_type='official';")
         official_alias_count = int(cur.fetchone()[0])
-        if music_count != official_alias_count:
+        if active_music_count != official_alias_count:
             raise RuntimeError(
                 "official alias count mismatch: "
-                f"music={music_count}, official_alias={official_alias_count}"
+                f"active_music={active_music_count}, official_alias={official_alias_count}"
             )
 
         cur.execute(
