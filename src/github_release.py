@@ -39,16 +39,24 @@ def get_release_by_tag(repo: str, token: str, tag_name: str) -> dict | None:
     return response.json()
 
 
-def create_release(repo: str, token: str, tag_name: str) -> dict:
+def create_release(
+    repo: str,
+    token: str,
+    tag_name: str,
+    draft: bool = True,
+    body: str | None = None,
+) -> dict:
     """Create a release for `tag_name` and return the release JSON."""
     url = f"{GITHUB_API}/repos/{repo}/releases"
     payload = {
         "tag_name": tag_name,
         "name": tag_name,
-        "draft": False,
+        "draft": draft,
         "prerelease": False,
         "generate_release_notes": False,
     }
+    if body is not None:
+        payload["body"] = body
 
     response = requests.post(url, headers=_headers(token), json=payload, timeout=30)
     response.raise_for_status()
@@ -92,6 +100,8 @@ def create_date_tag_release(
     token: str,
     generated_at: str | None = None,
     max_suffix: int = 200,
+    draft: bool = True,
+    release_body_template: str | None = None,
 ) -> dict:
     """
     Create a new immutable date-tag release.
@@ -104,7 +114,16 @@ def create_date_tag_release(
     last_error = None
     for tag_name in _iter_date_tag_candidates(base_date_tag, max_suffix=max_suffix):
         try:
-            release = create_release(repo=repo, token=token, tag_name=tag_name)
+            body = None
+            if release_body_template is not None:
+                body = release_body_template.format(tag=tag_name)
+            release = create_release(
+                repo=repo,
+                token=token,
+                tag_name=tag_name,
+                draft=draft,
+                body=body,
+            )
             release["tag_name"] = tag_name
             return release
         except requests.HTTPError as exc:
@@ -192,6 +211,8 @@ def publish_files_as_new_date_release(
     file_paths: list[str],
     generated_at: str | None = None,
     max_suffix: int = 200,
+    draft: bool = True,
+    release_body_template: str | None = None,
 ) -> dict:
     """
     Create a new date-tag release and upload files to it.
@@ -203,6 +224,8 @@ def publish_files_as_new_date_release(
         token=token,
         generated_at=generated_at,
         max_suffix=max_suffix,
+        draft=draft,
+        release_body_template=release_body_template,
     )
     upload_files_to_release(release=release, token=token, file_paths=file_paths)
     return release

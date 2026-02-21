@@ -1,4 +1,4 @@
-"""Textage からテーブルJSを取得し、Python辞書へ変換する。"""
+"""Load Textage JS tables and parse them into Python dicts."""
 
 from __future__ import annotations
 
@@ -11,28 +11,29 @@ import requests
 TITLE_URL = "https://textage.cc/score/titletbl.js"
 DATA_URL = "https://textage.cc/score/datatbl.js"
 ACT_URL = "https://textage.cc/score/actbl.js"
+CONTENT_TYPE_CHARSET_RE = re.compile(r"charset\s*=\s*([A-Za-z0-9._-]+)", flags=re.I)
 
 
 # pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
 def _extract_js_object(js_text: str, varname: str) -> dict:
     """
-    JSテキスト中の `varname = {...}` を抽出し、辞書に変換する。
+    Extract and parse `varname = {...}` object from JS source text.
 
-    変換時に以下を行う:
-    - 定数（例: `SS=35`）を負値へ置換
-    - 行コメントの除去
-    - `.fontcolor(...)` の除去
-    - シングルクォートキーのJSON化
-    - actblの裸識別子 `A-F` の文字列化
+    Preprocess steps:
+    - Replace constants (e.g., `SS=35`) with negative value convention used in this project.
+    - Strip line comments.
+    - Strip `.fontcolor(...)` decorations.
+    - Convert single-quoted object keys to JSON-compatible double quotes.
+    - Convert actbl's bare A-F tokens into quoted strings.
     """
     match = re.search(rf"{varname}\s*=\s*\{{", js_text)
     if not match:
-        raise RuntimeError(f"{varname} が JS 内に見つかりません")
+        raise RuntimeError(f"{varname} not found in JS")
 
     start = match.start()
     brace_start = js_text.find("{", start)
     if brace_start == -1:
-        raise RuntimeError(f"{varname} の開始ブレースが見つかりません")
+        raise RuntimeError(f"opening brace for {varname} not found")
 
     index = brace_start
     depth = 0
@@ -63,31 +64,24 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
         index += 1
 
     if end_index is None:
-        raise RuntimeError(f"{varname} の終了ブレースが見つかりません")
+        raise RuntimeError(f"closing brace for {varname} not found")
 
     obj_text = js_text[brace_start : end_index + 1]
 
-    # 定数置換（例: SS=35 -> -35）
     consts = dict(re.findall(r"([A-Z_][A-Z0-9_]*)\s*=\s*([0-9]+)\s*;", js_text))
     for name, val in consts.items():
         obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", f"-{val}", obj_text)
 
-    # JSコメント除去（末尾改行なしにも対応）
     obj_text = re.sub(r"//[^\n]*(?=\n|$)", "", obj_text)
-
-    # 装飾メソッドの除去
     obj_text = re.sub(r"\.fontcolor\([^)]*\)", "", obj_text)
-
-    # シングルクォートキーをJSON準拠へ
     obj_text = re.sub(r"'([^']*?)'(\s*):", r'"\1"\2:', obj_text)
 
-    # actbl の裸識別子 A-F を文字列化
     obj_text = re.sub(r"(?<=,)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=\[)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=,)([A-F])(?=\])", r'"\1"', obj_text)
 
     def _escape_ctrl(match_obj: re.Match[str]) -> str:
-        """文字列リテラル内の制御文字を `\\uXXXX` へ置換する。"""
+        """Escape raw control characters inside JSON-like string literals."""
         src = match_obj.group(1)
         out: list[str] = []
         idx = 0
@@ -105,7 +99,6 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
             idx += 1
         return '"' + "".join(out) + '"'
 
-    # titletbl は配列部分だけを個別に拾ってパースする。
     if varname == "titletbl":
         result: dict[str, list] = {}
         entry_re = re.compile(r"['\"]([^'\"]+)['\"]\s*:\s*(\[[^\]]*\])", flags=re.S)
@@ -128,12 +121,58 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
 
 
 def _sha256_hex(data: bytes) -> str:
-    """バイナリデータの SHA-256（16進）を返す。"""
+    """Return SHA-256 hex digest for raw bytes."""
     return hashlib.sha256(data).hexdigest()
 
 
+def _charset_from_content_type(content_type: str | None) -> str | None:
+    """Extract charset token from Content-Type header."""
+    if not content_type:
+        return None
+    match = CONTENT_TYPE_CHARSET_RE.search(content_type)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _decode_textage_response(response: requests.Response) -> str:
+    """
+    Decode Textage JS bytes deterministically.
+
+    Textage endpoints usually omit charset, and requests' guess can be wrong for Japanese text.
+    """
+    raw = response.content
+    candidates: list[str] = []
+
+    header_charset = _charset_from_content_type(response.headers.get("Content-Type"))
+    if header_charset:
+        candidates.append(header_charset)
+    if response.encoding:
+        candidates.append(response.encoding)
+
+    for encoding in ("cp932", "shift_jis", "utf-8", "euc_jp"):
+        candidates.append(encoding)
+
+    seen: set[str] = set()
+    ordered_candidates = []
+    for candidate in candidates:
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered_candidates.append(candidate)
+
+    for encoding in ordered_candidates:
+        try:
+            return raw.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+
+    return raw.decode("cp932", errors="replace")
+
+
 def fetch_textage_tables_with_hashes() -> tuple[dict, dict, dict, dict[str, str]]:
-    """Textage 3ファイルを取得し、解析結果とソースハッシュを返す。"""
+    """Fetch Textage titletbl/datatbl/actbl and return parsed tables with source hashes."""
     title_resp = requests.get(TITLE_URL, timeout=30)
     title_resp.raise_for_status()
 
@@ -143,9 +182,13 @@ def fetch_textage_tables_with_hashes() -> tuple[dict, dict, dict, dict[str, str]
     act_resp = requests.get(ACT_URL, timeout=30)
     act_resp.raise_for_status()
 
-    titletbl = _extract_js_object(title_resp.text, "titletbl")
-    datatbl = _extract_js_object(data_resp.text, "datatbl")
-    actbl = _extract_js_object(act_resp.text, "actbl")
+    title_text = _decode_textage_response(title_resp)
+    data_text = _decode_textage_response(data_resp)
+    act_text = _decode_textage_response(act_resp)
+
+    titletbl = _extract_js_object(title_text, "titletbl")
+    datatbl = _extract_js_object(data_text, "datatbl")
+    actbl = _extract_js_object(act_text, "actbl")
 
     source_hashes = {
         "titletbl.js": _sha256_hex(title_resp.content),
@@ -157,6 +200,6 @@ def fetch_textage_tables_with_hashes() -> tuple[dict, dict, dict, dict[str, str]
 
 
 def fetch_textage_tables() -> tuple[dict, dict, dict]:
-    """Textage 3ファイルを取得し、解析結果のみを返す。"""
+    """Fetch Textage tables and return parsed table dicts."""
     titletbl, datatbl, actbl, _ = fetch_textage_tables_with_hashes()
     return titletbl, datatbl, actbl
