@@ -68,7 +68,7 @@ def test_seed_wiki_aliases_from_fixture():
                 """
                 SELECT alias
                 FROM music_title_alias
-                WHERE alias_type='csv_wiki'
+                WHERE alias_type='csv_wiki' AND alias_scope='ac'
                 ORDER BY alias;
                 """
             ).fetchall()
@@ -79,6 +79,14 @@ def test_seed_wiki_aliases_from_fixture():
             "VOID",
             "\u707c\u71b1B",
         ]
+        csv_wiki_inf_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM music_title_alias
+            WHERE alias_type='csv_wiki' AND alias_scope='inf';
+            """
+        ).fetchone()[0]
+        assert csv_wiki_inf_count == 0
     finally:
         conn.close()
 
@@ -171,9 +179,70 @@ def test_seed_official_aliases_includes_only_active_songs():
         assert inserted == 1
 
         aliases = conn.execute(
-            "SELECT textage_id, alias FROM music_title_alias ORDER BY textage_id;"
+            """
+            SELECT alias_scope, textage_id, alias
+            FROM music_title_alias
+            ORDER BY alias_scope, textage_id;
+            """
         ).fetchall()
-        assert aliases == [("A001", "Song Active")]
+        assert aliases == [("ac", "A001", "Song Active")]
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_seed_official_aliases_creates_both_scopes_for_dual_active_song():
+    """Dual-active song must get both official scope rows."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        ensure_schema(conn)
+        _insert_music(conn, "D001", "Dual Scope Song", is_ac_active=1, is_inf_active=1)
+        conn.commit()
+
+        reset_music_title_aliases(conn)
+        inserted = seed_official_aliases(conn, "2026-01-01T00:00:00Z")
+        assert inserted == 2
+
+        aliases = conn.execute(
+            """
+            SELECT alias_scope, textage_id, alias
+            FROM music_title_alias
+            ORDER BY alias_scope, textage_id;
+            """
+        ).fetchall()
+        assert aliases == [
+            ("ac", "D001", "Dual Scope Song"),
+            ("inf", "D001", "Dual Scope Song"),
+        ]
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_seed_official_aliases_allows_same_title_ac_inf_split():
+    """Same title is allowed when split between AC-only and INF-only songs."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        ensure_schema(conn)
+        _insert_music(conn, "S001", "Split Title", is_ac_active=1, is_inf_active=0)
+        _insert_music(conn, "S002", "Split Title", is_ac_active=0, is_inf_active=1)
+        conn.commit()
+
+        reset_music_title_aliases(conn)
+        inserted = seed_official_aliases(conn, "2026-01-01T00:00:00Z")
+        assert inserted == 2
+
+        aliases = conn.execute(
+            """
+            SELECT alias_scope, textage_id, alias
+            FROM music_title_alias
+            ORDER BY alias_scope, textage_id;
+            """
+        ).fetchall()
+        assert aliases == [
+            ("ac", "S001", "Split Title"),
+            ("inf", "S002", "Split Title"),
+        ]
     finally:
         conn.close()
 
@@ -203,5 +272,34 @@ def test_seed_wiki_aliases_ignores_inactive_song_resolution():
 
         assert report.inserted_csv_wiki_alias_count == 0
         assert report.unresolved_official_titles == ("Inactive Song",)
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_seed_wiki_aliases_ignores_inf_only_song_resolution():
+    """Wiki aliases are AC-only and must not resolve INF-only songs."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        ensure_schema(conn)
+        _insert_music(conn, "I002", "Inf Only Song", is_ac_active=0, is_inf_active=1)
+        conn.commit()
+
+        reset_music_title_aliases(conn)
+        seed_official_aliases(conn, "2026-01-01T00:00:00Z")
+        report = seed_wiki_aliases(
+            conn=conn,
+            wiki_rows=[
+                WikiAliasRow(
+                    official_title="Inf Only Song",
+                    replaced_titles=("Inf Only Alias",),
+                    note="",
+                )
+            ],
+            now_utc_iso="2026-01-01T00:00:00Z",
+        )
+
+        assert report.inserted_csv_wiki_alias_count == 0
+        assert report.unresolved_official_titles == ("Inf Only Song",)
     finally:
         conn.close()

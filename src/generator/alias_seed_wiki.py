@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from src.wiki.bemaniwiki_parse_title_alias import WikiAliasRow
 
 ALIAS_TYPE_CSV_WIKI = "csv_wiki"
+ALIAS_SCOPE_AC = "ac"
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ def seed_wiki_aliases(
     resolved_rows = 0
     inserted_count = 0
     dedup_skipped_count = 0
-    inserted_pairs: set[tuple[str, str]] = set()
+    inserted_pairs: set[tuple[str, str, str]] = set()
     per_song_inserted_count: dict[str, int] = {}
 
     for row in wiki_rows:
@@ -43,7 +44,7 @@ def seed_wiki_aliases(
             SELECT textage_id
             FROM music
             WHERE title = ?
-              AND (is_ac_active = 1 OR is_inf_active = 1)
+              AND is_ac_active = 1
             LIMIT 2;
             """,
             (row.official_title,),
@@ -67,7 +68,7 @@ def seed_wiki_aliases(
                 dedup_skipped_count += 1
                 continue
 
-            pair = (textage_id, replaced_title)
+            pair = (ALIAS_SCOPE_AC, textage_id, replaced_title)
             if pair in inserted_pairs:
                 dedup_skipped_count += 1
                 continue
@@ -76,11 +77,12 @@ def seed_wiki_aliases(
                 cur.execute(
                     """
                     INSERT INTO music_title_alias (
-                        textage_id, alias, alias_type, created_at, updated_at
+                        alias_scope, textage_id, alias, alias_type, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
+                        ALIAS_SCOPE_AC,
                         textage_id,
                         replaced_title,
                         ALIAS_TYPE_CSV_WIKI,
@@ -90,8 +92,8 @@ def seed_wiki_aliases(
                 )
             except sqlite3.IntegrityError as exc:
                 raise RuntimeError(
-                    "alias collision detected (global unique alias violated): "
-                    f"{replaced_title}"
+                    "alias collision detected (scope unique alias violated): "
+                    f"{ALIAS_SCOPE_AC}:{replaced_title}"
                 ) from exc
 
             inserted_pairs.add(pair)

@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import unicodedata
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -123,6 +124,7 @@ CHART_TYPES = [
     (9, "DP", "ANOTHER", 19),
     (10, "DP", "LEGGENDARIA", 21),
 ]
+ACTBL_TITLE_QUALIFIER_INDEX = 23
 
 
 def download_latest_sqlite_from_release(
@@ -204,6 +206,71 @@ def _backfill_title_search_keys(conn: sqlite3.Connection):
         )
 
 
+def _extract_actbl_title_qualifier(act_row: object) -> str:
+    """Extract explicit display qualifier from actbl row when present."""
+    if not isinstance(act_row, list):
+        return ""
+    if len(act_row) <= ACTBL_TITLE_QUALIFIER_INDEX:
+        return ""
+
+    raw_value = act_row[ACTBL_TITLE_QUALIFIER_INDEX]
+    if not isinstance(raw_value, str):
+        return ""
+
+    qualifier = normalize_textage_string(raw_value)
+    return qualifier
+
+
+def resolve_music_title_qualifiers(
+    conn: sqlite3.Connection,
+    explicit_title_qualifier_by_textage_id: dict[str, str] | None = None,
+):
+    """
+    Resolve display-only title qualifiers by these rules:
+    1) explicit actbl qualifier wins
+    2) if duplicate title and no explicit qualifier, fill (AC)/(INF) for single-scope actives
+    3) otherwise empty
+    """
+    explicit_map = explicit_title_qualifier_by_textage_id or {}
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT music_id, textage_id, title, is_ac_active, is_inf_active, title_qualifier
+        FROM music
+        ORDER BY music_id;
+        """
+    )
+    rows = cur.fetchall()
+    title_counts = Counter(str(row[2]) for row in rows)
+
+    updates: list[tuple[str, int]] = []
+    for music_id, textage_id, title, is_ac_active, is_inf_active, current_qualifier in rows:
+        textage_key = str(textage_id)
+        explicit_qualifier = explicit_map.get(textage_key, "")
+        if explicit_qualifier:
+            resolved = explicit_qualifier
+        elif title_counts[str(title)] > 1:
+            ac = int(is_ac_active)
+            inf = int(is_inf_active)
+            if ac == 1 and inf == 0:
+                resolved = "(AC)"
+            elif ac == 0 and inf == 1:
+                resolved = "(INF)"
+            else:
+                resolved = ""
+        else:
+            resolved = ""
+
+        if str(current_qualifier or "") != resolved:
+            updates.append((resolved, int(music_id)))
+
+    if updates:
+        cur.executemany(
+            "UPDATE music SET title_qualifier = ? WHERE music_id = ?",
+            updates,
+        )
+
+
 def ensure_schema(conn: sqlite3.Connection):
     """DBスキーマの作成・移行を行う。"""
     cur = conn.cursor()
@@ -215,6 +282,7 @@ def ensure_schema(conn: sqlite3.Connection):
         textage_id TEXT NOT NULL UNIQUE,
         version TEXT NOT NULL,
         title TEXT NOT NULL,
+        title_qualifier TEXT NOT NULL DEFAULT '',
         title_search_key TEXT NOT NULL,
         artist TEXT NOT NULL,
         genre TEXT NOT NULL,
@@ -261,6 +329,7 @@ def ensure_schema(conn: sqlite3.Connection):
     CREATE TABLE IF NOT EXISTS music_title_alias (
         alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
         textage_id TEXT NOT NULL,
+        alias_scope TEXT NOT NULL CHECK(alias_scope IN ('ac', 'inf')),
         alias TEXT NOT NULL,
         alias_type TEXT NOT NULL CHECK(alias_type IN ('official', 'csv_wiki', 'manual')),
         created_at TEXT NOT NULL,
@@ -275,6 +344,20 @@ def ensure_schema(conn: sqlite3.Connection):
     ):
         cur.execute(
             "ALTER TABLE music ADD COLUMN title_search_key TEXT NOT NULL DEFAULT ''"
+        )
+
+    if _table_exists(conn, "music") and not _column_exists(
+        conn, "music", "title_qualifier"
+    ):
+        cur.execute(
+            "ALTER TABLE music ADD COLUMN title_qualifier TEXT NOT NULL DEFAULT ''"
+        )
+
+    if _table_exists(conn, "music_title_alias") and not _column_exists(
+        conn, "music_title_alias", "alias_scope"
+    ):
+        cur.execute(
+            "ALTER TABLE music_title_alias ADD COLUMN alias_scope TEXT NOT NULL DEFAULT 'ac'"
         )
 
     _backfill_title_search_keys(conn)
@@ -293,17 +376,23 @@ def ensure_schema(conn: sqlite3.Connection):
         "CREATE INDEX IF NOT EXISTS idx_music_title_search_key "
         "ON music(title_search_key);"
     )
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_music_title_alias_alias "
-        "ON music_title_alias(alias);"
-    )
+    cur.execute("DROP INDEX IF EXISTS uq_music_title_alias_alias;")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_music_title_alias_textage_id "
         "ON music_title_alias(textage_id);"
     )
+    cur.execute("DROP INDEX IF EXISTS uq_music_title_alias_textage_alias;")
     cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_music_title_alias_textage_alias "
-        "ON music_title_alias(textage_id, alias);"
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_music_title_alias_scope_alias "
+        "ON music_title_alias(alias_scope, alias);"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_music_title_alias_scope_alias "
+        "ON music_title_alias(alias_scope, alias);"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_music_title_alias_textage_scope_alias "
+        "ON music_title_alias(textage_id, alias_scope, alias);"
     )
 
     conn.commit()
@@ -403,6 +492,21 @@ def rebuild_music_title_aliases(
         )
 
     verify_summary = verify_music_title_alias_integrity(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT alias_scope, alias_type, COUNT(*) AS c
+        FROM music_title_alias
+        GROUP BY alias_scope, alias_type
+        ORDER BY alias_scope, alias_type;
+        """
+    )
+    scope_type_counts = {
+        f"{row[0]}:{row[1]}": int(row[2])
+        for row in cur.fetchall()
+    }
+    print(f"[alias] scope_type_counts={scope_type_counts}")
+
     return {
         "official_alias_count": official_count,
         "wiki_source": source,
@@ -430,8 +534,11 @@ def rebuild_music_title_aliases(
         "max_csv_wiki_candidates_per_song": (
             seed_report.max_csv_wiki_candidates_per_song if seed_report is not None else 0
         ),
-        "alias_music_count": verify_summary.active_music_count,
-        "alias_official_count": verify_summary.official_alias_count,
+        "alias_ac_music_count": verify_summary.active_ac_music_count,
+        "alias_inf_music_count": verify_summary.active_inf_music_count,
+        "alias_official_ac_count": verify_summary.official_ac_alias_count,
+        "alias_official_inf_count": verify_summary.official_inf_alias_count,
+        "scope_type_counts": scope_type_counts,
     }
 
 
@@ -607,6 +714,7 @@ def build_or_update_sqlite(
     music_processed = 0
     chart_processed = 0
     ignored = 0
+    explicit_title_qualifier_by_textage_id: dict[str, str] = {}
 
     for tag, row in titletbl.items():
         if tag not in datatbl or tag not in actbl:
@@ -626,7 +734,8 @@ def build_or_update_sqlite(
             if subtitle:
                 title = f"{title} {subtitle}"
 
-        value = actbl[tag][0]
+        act_row = actbl[tag]
+        value = act_row[0]
         flags = value if isinstance(value, int) else int(value, 16)
         is_ac_active = 1 if (flags & 0x01) else 0
         is_inf_active = 1 if (flags & 0x02) else 0
@@ -641,11 +750,14 @@ def build_or_update_sqlite(
             is_ac_active=is_ac_active,
             is_inf_active=is_inf_active,
         )
+        explicit_qualifier = _extract_actbl_title_qualifier(act_row)
+        if explicit_qualifier:
+            explicit_title_qualifier_by_textage_id[textage_id] = explicit_qualifier
         music_processed += 1
 
         for chart_type, play_style, difficulty, _ in CHART_TYPES:
             notes = datatbl[tag][chart_type]
-            lv_hex = actbl[tag][chart_type * 2 + 1]
+            lv_hex = act_row[chart_type * 2 + 1]
             lv_int = lv_hex if isinstance(lv_hex, int) else int(str(lv_hex), 16)
             is_active = 1 if lv_int > 0 else 0
 
@@ -659,6 +771,11 @@ def build_or_update_sqlite(
                 is_active=is_active,
             )
             chart_processed += 1
+
+    resolve_music_title_qualifiers(
+        conn=conn,
+        explicit_title_qualifier_by_textage_id=explicit_title_qualifier_by_textage_id,
+    )
 
     alias_report = rebuild_music_title_aliases(
         conn=conn,

@@ -143,8 +143,10 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
     conn = sqlite3.connect(sqlite_path)
     try:
         _assert_not_null_column(conn, "music", "textage_id")
+        _assert_not_null_column(conn, "music", "title_qualifier")
         _assert_not_null_column(conn, "music", "title_search_key")
         _assert_not_null_column(conn, "music_title_alias", "textage_id")
+        _assert_not_null_column(conn, "music_title_alias", "alias_scope")
         _assert_not_null_column(conn, "music_title_alias", "alias")
         _assert_not_null_column(conn, "music_title_alias", "alias_type")
 
@@ -154,13 +156,14 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
         if not _has_unique_index(conn, "chart", ["music_id", "play_style", "difficulty"]):
             raise RuntimeError("chart unique index is missing")
 
-        if not _has_unique_index(conn, "music_title_alias", ["alias"]):
-            raise RuntimeError("music_title_alias.alias unique index is missing")
+        if not _has_unique_index(conn, "music_title_alias", ["alias_scope", "alias"]):
+            raise RuntimeError("music_title_alias(alias_scope, alias) unique index is missing")
 
         _assert_index_exists(conn, "music", "idx_music_title_search_key")
         _assert_index_exists(conn, "music_title_alias", "idx_music_title_alias_textage_id")
-        _assert_index_exists(conn, "music_title_alias", "uq_music_title_alias_alias")
-        _assert_index_exists(conn, "music_title_alias", "uq_music_title_alias_textage_alias")
+        _assert_index_exists(conn, "music_title_alias", "uq_music_title_alias_scope_alias")
+        _assert_index_exists(conn, "music_title_alias", "idx_music_title_alias_scope_alias")
+        _assert_index_exists(conn, "music_title_alias", "uq_music_title_alias_textage_scope_alias")
 
         cur = conn.cursor()
 
@@ -169,21 +172,84 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
         if null_count > 0:
             raise RuntimeError(f"title_search_key has {null_count} NULL rows")
 
+        cur.execute("SELECT COUNT(*) FROM music WHERE title_qualifier IS NULL;")
+        null_title_qualifier_count = int(cur.fetchone()[0])
+        if null_title_qualifier_count > 0:
+            raise RuntimeError(f"title_qualifier has {null_title_qualifier_count} NULL rows")
+
         cur.execute(
             """
             SELECT COUNT(*)
             FROM music
-            WHERE is_ac_active = 1 OR is_inf_active = 1;
+            WHERE title_qualifier <> ''
+              AND (INSTR(title_qualifier, '(') > 0 OR INSTR(title_qualifier, ')') > 0)
+              AND (SUBSTR(title_qualifier, 1, 1) <> '(' OR SUBSTR(title_qualifier, -1, 1) <> ')');
             """
         )
-        active_music_count = int(cur.fetchone()[0])
-
-        cur.execute("SELECT COUNT(*) FROM music_title_alias WHERE alias_type='official';")
-        official_alias_count = int(cur.fetchone()[0])
-        if active_music_count != official_alias_count:
+        malformed_title_qualifier_count = int(cur.fetchone()[0])
+        if malformed_title_qualifier_count > 0:
             raise RuntimeError(
-                "official alias count mismatch: "
-                f"active_music={active_music_count}, official_alias={official_alias_count}"
+                "title_qualifier format mismatch detected: "
+                f"{malformed_title_qualifier_count}"
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music m
+            INNER JOIN (
+                SELECT title
+                FROM music
+                GROUP BY title
+                HAVING COUNT(textage_id) > 1
+            ) dup ON dup.title = m.title
+            WHERE m.title_qualifier = ''
+              AND (
+                   (m.is_ac_active = 1 AND m.is_inf_active = 0)
+                OR (m.is_ac_active = 0 AND m.is_inf_active = 1)
+              );
+            """
+        )
+        missing_collision_title_qualifier_count = int(cur.fetchone()[0])
+        if missing_collision_title_qualifier_count > 0:
+            raise RuntimeError(
+                "title collision rows with single-scope activity must have title_qualifier: "
+                f"{missing_collision_title_qualifier_count}"
+            )
+
+        cur.execute("SELECT COUNT(*) FROM music WHERE is_ac_active = 1;")
+        active_ac_music_count = int(cur.fetchone()[0])
+        cur.execute("SELECT COUNT(*) FROM music WHERE is_inf_active = 1;")
+        active_inf_music_count = int(cur.fetchone()[0])
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music_title_alias
+            WHERE alias_type='official' AND alias_scope='ac';
+            """
+        )
+        official_ac_alias_count = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music_title_alias
+            WHERE alias_type='official' AND alias_scope='inf';
+            """
+        )
+        official_inf_alias_count = int(cur.fetchone()[0])
+
+        if active_ac_music_count != official_ac_alias_count:
+            raise RuntimeError(
+                "official alias count mismatch for ac: "
+                f"active_ac_music={active_ac_music_count}, "
+                f"official_ac_alias={official_ac_alias_count}"
+            )
+        if active_inf_music_count != official_inf_alias_count:
+            raise RuntimeError(
+                "official alias count mismatch for inf: "
+                f"active_inf_music={active_inf_music_count}, "
+                f"official_inf_alias={official_inf_alias_count}"
             )
 
         cur.execute(

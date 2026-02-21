@@ -1,4 +1,4 @@
-"""sqlite_builder の fixture ベース動作検証。"""
+"""Fixture behavior tests for sqlite_builder."""
 
 from __future__ import annotations
 
@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from src.sqlite_builder import CHART_TYPES, build_or_update_sqlite
+from src.sqlite_builder import (
+    CHART_TYPES,
+    build_or_update_sqlite,
+    ensure_schema,
+    resolve_music_title_qualifiers,
+    upsert_music,
+)
 
 
 def _make_title_row(
@@ -19,12 +25,10 @@ def _make_title_row(
     artist: str = "ARTIST",
     title: str = "TITLE",
 ) -> list:
-    """titletbl 1行分のダミーデータを作る。"""
     return [version, textage_id, "", genre, artist, title]
 
 
 def _make_data_row(*, base_notes: int = 100) -> list[int]:
-    """datatbl 1行分のダミーデータを作る。"""
     row = [0] * 11
     for chart_type, _, _, _ in CHART_TYPES:
         row[chart_type] = base_notes + chart_type
@@ -36,20 +40,21 @@ def _make_act_row(
     flags_hex: str = "03",
     default_level_hex: str = "5",
     level_overrides: dict[int, str] | None = None,
+    title_qualifier: str | None = None,
 ) -> list:
-    """actbl 1行分のダミーデータを作る。"""
-    row = [0] * 22
+    row = [0] * 24
     row[0] = flags_hex
     for chart_type, _, _, _ in CHART_TYPES:
         row[chart_type * 2 + 1] = default_level_hex
     if level_overrides:
         for chart_type, lv_hex in level_overrides.items():
             row[chart_type * 2 + 1] = lv_hex
+    if title_qualifier is not None:
+        row[23] = title_qualifier
     return row
 
 
 def _read_music_row(conn: sqlite3.Connection, textage_id: str) -> tuple:
-    """比較用に music 行の主要時刻列を読む。"""
     return conn.execute(
         """
         SELECT music_id, created_at, updated_at, last_seen_at
@@ -62,7 +67,6 @@ def _read_music_row(conn: sqlite3.Connection, textage_id: str) -> tuple:
 
 @pytest.mark.light
 def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
-    """datatbl/actbl 欠損キーが除外されることを検証する。"""
     sqlite_path = tmp_path / "fixture.sqlite"
 
     titletbl = {
@@ -93,12 +97,12 @@ def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
     try:
         assert conn.execute("SELECT COUNT(*) FROM music;").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM chart;").fetchone()[0] == len(CHART_TYPES)
-        assert conn.execute("SELECT COUNT(*) FROM music_title_alias;").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM music_title_alias;").fetchone()[0] == 2
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM music_title_alias WHERE alias_type='official';"
             ).fetchone()[0]
-            == 1
+            == 2
         )
     finally:
         conn.close()
@@ -106,7 +110,6 @@ def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
 
 @pytest.mark.light
 def test_invalid_hex_level_in_actbl_fails(tmp_path: Path):
-    """actbl の不正16進値を ValueError として検出できることを検証する。"""
     sqlite_path = tmp_path / "invalid_hex.sqlite"
     titletbl = {"bad": _make_title_row(textage_id="B001", title="BAD")}
     datatbl = {"bad": _make_data_row()}
@@ -124,7 +127,6 @@ def test_invalid_hex_level_in_actbl_fails(tmp_path: Path):
 
 @pytest.mark.light
 def test_lightweight_schema_minimum_constraints(tmp_path: Path):
-    """軽量検証として最低限スキーマ制約があることを確認する。"""
     sqlite_path = tmp_path / "schema_minimum.sqlite"
     build_or_update_sqlite(
         sqlite_path=str(sqlite_path),
@@ -138,8 +140,10 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
     try:
         cols = {row[1]: row for row in conn.execute("PRAGMA table_info(music);").fetchall()}
         assert "textage_id" in cols
+        assert "title_qualifier" in cols
         assert "title_search_key" in cols
         assert cols["textage_id"][3] == 1
+        assert cols["title_qualifier"][3] == 1
         assert cols["title_search_key"][3] == 1
 
         idx = conn.execute(
@@ -154,16 +158,18 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
             row[1]: row for row in conn.execute("PRAGMA table_info(music_title_alias);").fetchall()
         }
         assert "textage_id" in alias_cols
+        assert "alias_scope" in alias_cols
         assert "alias" in alias_cols
         assert "alias_type" in alias_cols
         assert alias_cols["textage_id"][3] == 1
+        assert alias_cols["alias_scope"][3] == 1
         assert alias_cols["alias"][3] == 1
         assert alias_cols["alias_type"][3] == 1
 
         assert conn.execute(
             """
             SELECT 1 FROM sqlite_master
-            WHERE type='index' AND name='uq_music_title_alias_alias';
+            WHERE type='index' AND name='uq_music_title_alias_scope_alias';
             """
         ).fetchone() is not None
         assert conn.execute(
@@ -175,7 +181,13 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
         assert conn.execute(
             """
             SELECT 1 FROM sqlite_master
-            WHERE type='index' AND name='uq_music_title_alias_textage_alias';
+            WHERE type='index' AND name='idx_music_title_alias_scope_alias';
+            """
+        ).fetchone() is not None
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='uq_music_title_alias_textage_scope_alias';
             """
         ).fetchone() is not None
     finally:
@@ -184,7 +196,6 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
 
 @pytest.mark.light
 def test_diff_update_converges_and_updates_flags(tmp_path: Path):
-    """同一キー2回生成で収束し、更新列と is_active が正しく変化することを確認する。"""
     sqlite_path = tmp_path / "update.sqlite"
     textage_id = "C001"
 
@@ -217,10 +228,10 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
     try:
         after = _read_music_row(conn, textage_id)
         assert after is not None
-        assert after[0] == before[0]  # music_id
-        assert after[1] == before[1]  # created_at は保持
-        assert after[2] != before[2]  # updated_at は更新
-        assert after[3] != before[3]  # last_seen_at は更新
+        assert after[0] == before[0]
+        assert after[1] == before[1]
+        assert after[2] != before[2]
+        assert after[3] != before[3]
 
         assert conn.execute(
             "SELECT COUNT(*) FROM music WHERE textage_id = ?;",
@@ -251,5 +262,135 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
             (textage_id,),
         ).fetchone()[0]
         assert is_active == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_title_qualifier_resolution_priority_and_fallback():
+    conn = sqlite3.connect(":memory:")
+    try:
+        ensure_schema(conn)
+        upsert_music(
+            conn=conn,
+            textage_id="Q001",
+            version="33",
+            title="DUP",
+            artist="ARTIST",
+            genre="GENRE",
+            is_ac_active=1,
+            is_inf_active=0,
+        )
+        upsert_music(
+            conn=conn,
+            textage_id="Q002",
+            version="33",
+            title="DUP",
+            artist="ARTIST",
+            genre="GENRE",
+            is_ac_active=0,
+            is_inf_active=1,
+        )
+        upsert_music(
+            conn=conn,
+            textage_id="Q003",
+            version="33",
+            title="DUP",
+            artist="ARTIST",
+            genre="GENRE",
+            is_ac_active=1,
+            is_inf_active=1,
+        )
+        upsert_music(
+            conn=conn,
+            textage_id="Q004",
+            version="33",
+            title="EXPLICIT",
+            artist="ARTIST",
+            genre="GENRE",
+            is_ac_active=1,
+            is_inf_active=0,
+        )
+        upsert_music(
+            conn=conn,
+            textage_id="Q005",
+            version="33",
+            title="EXPLICIT",
+            artist="ARTIST",
+            genre="GENRE",
+            is_ac_active=0,
+            is_inf_active=1,
+        )
+        upsert_music(
+            conn=conn,
+            textage_id="Q006",
+            version="33",
+            title="SINGLE",
+            artist="ARTIST",
+            genre="GENRE",
+            is_ac_active=1,
+            is_inf_active=0,
+        )
+
+        resolve_music_title_qualifiers(
+            conn=conn,
+            explicit_title_qualifier_by_textage_id={"Q004": "(CS9th)"},
+        )
+
+        resolved = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT textage_id, title_qualifier FROM music ORDER BY textage_id;"
+            ).fetchall()
+        }
+        assert resolved["Q001"] == "(AC)"
+        assert resolved["Q002"] == "(INF)"
+        assert resolved["Q003"] == ""
+        assert resolved["Q004"] == "(CS9th)"
+        assert resolved["Q005"] == "(INF)"
+        assert resolved["Q006"] == ""
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_build_sets_title_qualifier_from_actbl_note(tmp_path: Path):
+    sqlite_path = tmp_path / "qualifier_from_actbl.sqlite"
+    titletbl = {
+        "dup_ac": _make_title_row(textage_id="A101", title="DUP"),
+        "dup_inf": _make_title_row(textage_id="A102", title="DUP"),
+        "explicit": _make_title_row(textage_id="A103", title="EXPLICIT"),
+        "single": _make_title_row(textage_id="A104", title="SINGLE"),
+    }
+    datatbl = {key: _make_data_row() for key in titletbl}
+    actbl = {
+        "dup_ac": _make_act_row(flags_hex="01"),
+        "dup_inf": _make_act_row(flags_hex="02"),
+        "explicit": _make_act_row(
+            flags_hex="01", title_qualifier="<span style='font-size:9pt'>(CS9th)</span>"
+        ),
+        "single": _make_act_row(flags_hex="01"),
+    }
+
+    build_or_update_sqlite(
+        sqlite_path=str(sqlite_path),
+        titletbl=titletbl,
+        datatbl=datatbl,
+        actbl=actbl,
+        schema_version="33",
+    )
+
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        resolved = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT textage_id, title_qualifier FROM music ORDER BY textage_id;"
+            ).fetchall()
+        }
+        assert resolved["A101"] == "(AC)"
+        assert resolved["A102"] == "(INF)"
+        assert resolved["A103"] == "(CS9th)"
+        assert resolved["A104"] == ""
     finally:
         conn.close()

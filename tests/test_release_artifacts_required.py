@@ -61,6 +61,7 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
         ).fetchone()
         assert alias_sql is not None
         alias_sql_norm = _normalize_sql(alias_sql[0])
+        assert "alias_scope text not null" in alias_sql_norm
         assert "alias text not null" in alias_sql_norm
         assert "alias_type text not null" in alias_sql_norm
 
@@ -78,7 +79,7 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
         assert conn.execute(
             """
             SELECT 1 FROM sqlite_master
-            WHERE type='index' AND name='uq_music_title_alias_alias';
+            WHERE type='index' AND name='uq_music_title_alias_scope_alias';
             """
         ).fetchone() is not None
         assert conn.execute(
@@ -87,18 +88,49 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
             WHERE type='index' AND name='idx_music_title_alias_textage_id';
             """
         ).fetchone() is not None
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='idx_music_title_alias_scope_alias';
+            """
+        ).fetchone() is not None
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='uq_music_title_alias_textage_scope_alias';
+            """
+        ).fetchone() is not None
 
-        music_count = conn.execute(
+        ac_music_count = conn.execute(
             """
             SELECT COUNT(*)
             FROM music
-            WHERE is_ac_active = 1 OR is_inf_active = 1;
+            WHERE is_ac_active = 1;
             """
         ).fetchone()[0]
-        official_alias_count = conn.execute(
-            "SELECT COUNT(*) FROM music_title_alias WHERE alias_type='official';"
+        inf_music_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM music
+            WHERE is_inf_active = 1;
+            """
         ).fetchone()[0]
-        assert music_count == official_alias_count
+        official_ac_alias_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM music_title_alias
+            WHERE alias_type='official' AND alias_scope='ac';
+            """
+        ).fetchone()[0]
+        official_inf_alias_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM music_title_alias
+            WHERE alias_type='official' AND alias_scope='inf';
+            """
+        ).fetchone()[0]
+        assert ac_music_count == official_ac_alias_count
+        assert inf_music_count == official_inf_alias_count
     finally:
         conn.close()
 
