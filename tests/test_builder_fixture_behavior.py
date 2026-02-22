@@ -20,12 +20,12 @@ from src.sqlite_builder import (
 def _make_title_row(
     *,
     version: str = "33",
-    textage_id: str = "T001",
+    legacy_textage_id: str = "T001",
     genre: str = "GENRE",
     artist: str = "ARTIST",
     title: str = "TITLE",
 ) -> list:
-    return [version, textage_id, "", genre, artist, title]
+    return [version, legacy_textage_id, "", genre, artist, title]
 
 
 def _make_data_row(*, base_notes: int = 100) -> list[int]:
@@ -70,9 +70,9 @@ def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
     sqlite_path = tmp_path / "fixture.sqlite"
 
     titletbl = {
-        "ok": _make_title_row(textage_id="A001", title="OK"),
-        "missing_data": _make_title_row(textage_id="A002", title="NO_DATA"),
-        "missing_act": _make_title_row(textage_id="A003", title="NO_ACT"),
+        "ok": _make_title_row(title="OK"),
+        "missing_data": _make_title_row(title="NO_DATA"),
+        "missing_act": _make_title_row(title="NO_ACT"),
     }
     datatbl = {
         "ok": _make_data_row(),
@@ -111,7 +111,7 @@ def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
 @pytest.mark.light
 def test_invalid_hex_level_in_actbl_fails(tmp_path: Path):
     sqlite_path = tmp_path / "invalid_hex.sqlite"
-    titletbl = {"bad": _make_title_row(textage_id="B001", title="BAD")}
+    titletbl = {"bad": _make_title_row(title="BAD")}
     datatbl = {"bad": _make_data_row()}
     actbl = {"bad": _make_act_row(level_overrides={2: "ZZ"})}
 
@@ -130,7 +130,7 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
     sqlite_path = tmp_path / "schema_minimum.sqlite"
     build_or_update_sqlite(
         sqlite_path=str(sqlite_path),
-        titletbl={"song": _make_title_row(textage_id="S001")},
+        titletbl={"song": _make_title_row()},
         datatbl={"song": _make_data_row()},
         actbl={"song": _make_act_row()},
         schema_version="33",
@@ -197,11 +197,11 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
 @pytest.mark.light
 def test_diff_update_converges_and_updates_flags(tmp_path: Path):
     sqlite_path = tmp_path / "update.sqlite"
-    textage_id = "C001"
+    textage_id = "song"
 
     build_or_update_sqlite(
         sqlite_path=str(sqlite_path),
-        titletbl={"song": _make_title_row(textage_id=textage_id, title="Song V1")},
+        titletbl={"song": _make_title_row(legacy_textage_id="C001", title="Song V1")},
         datatbl={"song": _make_data_row(base_notes=200)},
         actbl={"song": _make_act_row(default_level_hex="5")},
         schema_version="33",
@@ -218,7 +218,7 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
 
     build_or_update_sqlite(
         sqlite_path=str(sqlite_path),
-        titletbl={"song": _make_title_row(textage_id=textage_id, title="Song V2")},
+        titletbl={"song": _make_title_row(legacy_textage_id="C999", title="Song V2")},
         datatbl={"song": _make_data_row(base_notes=250)},
         actbl={"song": _make_act_row(default_level_hex="5", level_overrides={2: "0"})},
         schema_version="33",
@@ -357,10 +357,10 @@ def test_title_qualifier_resolution_priority_and_fallback():
 def test_build_sets_title_qualifier_from_actbl_note(tmp_path: Path):
     sqlite_path = tmp_path / "qualifier_from_actbl.sqlite"
     titletbl = {
-        "dup_ac": _make_title_row(textage_id="A101", title="DUP"),
-        "dup_inf": _make_title_row(textage_id="A102", title="DUP"),
-        "explicit": _make_title_row(textage_id="A103", title="EXPLICIT"),
-        "single": _make_title_row(textage_id="A104", title="SINGLE"),
+        "dup_ac": _make_title_row(legacy_textage_id="A101", title="DUP"),
+        "dup_inf": _make_title_row(legacy_textage_id="A102", title="DUP"),
+        "explicit": _make_title_row(legacy_textage_id="A103", title="EXPLICIT"),
+        "single": _make_title_row(legacy_textage_id="A104", title="SINGLE"),
     }
     datatbl = {key: _make_data_row() for key in titletbl}
     actbl = {
@@ -388,9 +388,40 @@ def test_build_sets_title_qualifier_from_actbl_note(tmp_path: Path):
                 "SELECT textage_id, title_qualifier FROM music ORDER BY textage_id;"
             ).fetchall()
         }
-        assert resolved["A101"] == "(AC)"
-        assert resolved["A102"] == "(INF)"
-        assert resolved["A103"] == "(CS9th)"
-        assert resolved["A104"] == ""
+        assert resolved["dup_ac"] == "(AC)"
+        assert resolved["dup_inf"] == "(INF)"
+        assert resolved["explicit"] == "(CS9th)"
+        assert resolved["single"] == ""
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_build_uses_titletbl_key_as_textage_id(tmp_path: Path):
+    sqlite_path = tmp_path / "textage_id_from_tag.sqlite"
+    titletbl = {
+        "acidvis": _make_title_row(legacy_textage_id="3905", title="ACID VISION"),
+        "a_galaxy": _make_title_row(legacy_textage_id="3905", title="Around The Galaxy"),
+    }
+    datatbl = {key: _make_data_row() for key in titletbl}
+    actbl = {key: _make_act_row() for key in titletbl}
+
+    build_or_update_sqlite(
+        sqlite_path=str(sqlite_path),
+        titletbl=titletbl,
+        datatbl=datatbl,
+        actbl=actbl,
+        schema_version="33",
+    )
+
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        rows = conn.execute(
+            "SELECT textage_id, title FROM music ORDER BY textage_id;"
+        ).fetchall()
+        assert rows == [
+            ("a_galaxy", "Around The Galaxy"),
+            ("acidvis", "ACID VISION"),
+        ]
     finally:
         conn.close()

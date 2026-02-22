@@ -723,7 +723,8 @@ def build_or_update_sqlite(
 
         version_raw = str(row[0])
         version = "SS" if version_raw == "-35" else version_raw
-        textage_id = str(row[1])
+        # textage_id must be stable and unique across updates; titletbl key satisfies this.
+        textage_id = str(tag)
 
         genre = normalize_textage_string(row[3])
         artist = normalize_textage_string(row[4])
