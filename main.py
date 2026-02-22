@@ -25,7 +25,6 @@ from src.build_validation import (
     validate_latest_manifest,
     write_latest_manifest,
 )
-from src.config import load_bemaniwiki_alias_config
 from src.discord_notify import send_discord_message
 from src.github_release import (
     download_asset,
@@ -33,7 +32,7 @@ from src.github_release import (
     get_latest_release,
     publish_files_as_new_date_release,
 )
-from src.sqlite_builder import build_or_update_sqlite
+from src.sqlite_builder import DEFAULT_MANUAL_ALIAS_CSV_PATH, build_or_update_sqlite
 from src.textage_loader import fetch_textage_tables_with_hashes
 
 JST = timezone(timedelta(hours=9), "JST")
@@ -160,11 +159,13 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
     """生成・検証・公開までのビルドフローを実行する。"""
     try:
         settings = load_settings("settings.yaml")
-        bemaniwiki_alias_config = load_bemaniwiki_alias_config(settings)
 
         output_db_path = settings.get("output_db_path", "song_master.sqlite")
         schema_version = str(settings.get("schema_version", "1"))
         chart_id_missing_policy = str(settings.get("chart_id_missing_policy", "error"))
+        manual_alias_csv_path = str(
+            settings.get("music_alias_manual_csv_path", DEFAULT_MANUAL_ALIAS_CSV_PATH)
+        ).strip() or DEFAULT_MANUAL_ALIAS_CSV_PATH
 
         github_cfg = settings.get("github", {})
         owner = github_cfg.get("owner")
@@ -247,7 +248,7 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 reset_flags=True,
                 schema_version=schema_version,
                 asset_updated_at=previous_asset_updated_at,
-                bemaniwiki_alias_config=bemaniwiki_alias_config,
+                manual_alias_csv_path=manual_alias_csv_path,
             )
 
             validate_db_schema_and_data(
@@ -295,8 +296,9 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 f"- chart_processed: {result['chart_processed']}",
                 f"- ignored: {result['ignored']}",
                 f"- official_alias_count: {result['official_alias_count']}",
-                f"- csv_wiki_alias_count: {result['inserted_csv_wiki_alias_count']}",
-                f"- unresolved_wiki_titles: {result['unresolved_official_titles_count']}",
+                f"- manual_alias_count: {result['inserted_manual_alias_count']}",
+                "- manual_alias_redundant_skipped_count: "
+                f"{result['skipped_redundant_manual_alias_count']}",
                 f"- chart_id_checked: {'yes' if chart_check else 'no'}",
                 f"- generated_at: {manifest['generated_at']}",
                 f"- sha256: {manifest['sha256']}",

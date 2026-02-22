@@ -89,6 +89,7 @@ def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
         datatbl=datatbl,
         actbl=actbl,
         schema_version="33",
+        manual_alias_csv_path=None,
     )
     assert result["music_processed"] == 1
     assert result["ignored"] == 2
@@ -122,6 +123,7 @@ def test_invalid_hex_level_in_actbl_fails(tmp_path: Path):
             datatbl=datatbl,
             actbl=actbl,
             schema_version="33",
+            manual_alias_csv_path=None,
         )
 
 
@@ -134,6 +136,7 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
         datatbl={"song": _make_data_row()},
         actbl={"song": _make_act_row()},
         schema_version="33",
+        manual_alias_csv_path=None,
     )
 
     conn = sqlite3.connect(str(sqlite_path))
@@ -205,6 +208,7 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
         datatbl={"song": _make_data_row(base_notes=200)},
         actbl={"song": _make_act_row(default_level_hex="5")},
         schema_version="33",
+        manual_alias_csv_path=None,
     )
 
     conn = sqlite3.connect(str(sqlite_path))
@@ -222,6 +226,7 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
         datatbl={"song": _make_data_row(base_notes=250)},
         actbl={"song": _make_act_row(default_level_hex="5", level_overrides={2: "0"})},
         schema_version="33",
+        manual_alias_csv_path=None,
     )
 
     conn = sqlite3.connect(str(sqlite_path))
@@ -378,6 +383,7 @@ def test_build_sets_title_qualifier_from_actbl_note(tmp_path: Path):
         datatbl=datatbl,
         actbl=actbl,
         schema_version="33",
+        manual_alias_csv_path=None,
     )
 
     conn = sqlite3.connect(str(sqlite_path))
@@ -412,6 +418,7 @@ def test_build_uses_titletbl_key_as_textage_id(tmp_path: Path):
         datatbl=datatbl,
         actbl=actbl,
         schema_version="33",
+        manual_alias_csv_path=None,
     )
 
     conn = sqlite3.connect(str(sqlite_path))

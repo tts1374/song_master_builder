@@ -14,12 +14,9 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from src.config import BemaniWikiAliasConfig
+from src.generator.alias_seed_manual import ManualAliasSeedReport, seed_manual_aliases_from_csv
 from src.generator.alias_seed_official import reset_music_title_aliases, seed_official_aliases
-from src.generator.alias_seed_wiki import seed_wiki_aliases
 from src.verify.alias_verify import verify_music_title_alias_integrity
-from src.wiki.bemaniwiki_fetch import load_bemaniwiki_title_alias_html
-from src.wiki.bemaniwiki_parse_title_alias import parse_bemaniwiki_title_alias_table
 
 TAG_RE = re.compile(r"<[^>]+>")
 SPACE_RE = re.compile(r"\s+")
@@ -125,6 +122,7 @@ CHART_TYPES = [
     (10, "DP", "LEGGENDARIA", 21),
 ]
 ACTBL_TITLE_QUALIFIER_INDEX = 23
+DEFAULT_MANUAL_ALIAS_CSV_PATH = "data/music_alias_manual.csv"
 
 
 def download_latest_sqlite_from_release(
@@ -331,7 +329,7 @@ def ensure_schema(conn: sqlite3.Connection):
         textage_id TEXT NOT NULL,
         alias_scope TEXT NOT NULL CHECK(alias_scope IN ('ac', 'inf')),
         alias TEXT NOT NULL,
-        alias_type TEXT NOT NULL CHECK(alias_type IN ('official', 'csv_wiki', 'manual')),
+        alias_type TEXT NOT NULL CHECK(alias_type IN ('official', 'manual')),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(textage_id) REFERENCES music(textage_id)
@@ -434,62 +432,31 @@ def reset_all_music_active_flags(conn: sqlite3.Connection):
 
 def rebuild_music_title_aliases(
     conn: sqlite3.Connection,
-    bemaniwiki_alias_config: BemaniWikiAliasConfig | None,
+    manual_alias_csv_path: str | None = DEFAULT_MANUAL_ALIAS_CSV_PATH,
 ) -> dict:
-    """Rebuild `music_title_alias` from official titles and optional wiki conversion table."""
+    """Rebuild `music_title_alias` from official titles and repository-managed manual CSV."""
     alias_timestamp = now_utc_iso()
     reset_music_title_aliases(conn)
     official_count = seed_official_aliases(conn, alias_timestamp)
-
-    parse_report = None
-    seed_report = None
-    source = None
-    encoding = None
-    replacement_count = 0
-
-    if bemaniwiki_alias_config is not None:
-        document = load_bemaniwiki_title_alias_html(bemaniwiki_alias_config)
-        source = document.source
-        encoding = document.encoding
-        replacement_count = document.replacement_char_count
-
-        wiki_rows, parse_report = parse_bemaniwiki_title_alias_table(document.html_text)
-        seed_report = seed_wiki_aliases(
+    manual_report = ManualAliasSeedReport(
+        inserted_manual_alias_count=0,
+        skipped_redundant_manual_alias_count=0,
+    )
+    if manual_alias_csv_path is not None:
+        manual_report = seed_manual_aliases_from_csv(
             conn=conn,
-            wiki_rows=wiki_rows,
+            csv_path=manual_alias_csv_path,
             now_utc_iso=alias_timestamp,
-            unresolved_official_title_fail_threshold=(
-                bemaniwiki_alias_config.unresolved_official_title_fail_threshold
-            ),
-        )
-
-        unresolved_count = len(seed_report.unresolved_official_titles)
-        unresolved_sample = list(seed_report.unresolved_official_titles[:10])
-        print(
-            "[alias/wiki] table_selected="
-            f"{parse_report.selected_table_index} scanned={parse_report.tables_scanned} "
-            f"matched={parse_report.matched_tables}"
         )
         print(
-            "[alias/wiki] rows total="
-            f"{parse_report.parsed_rows_total} definitions={parse_report.definition_rows} "
-            f"skipped={parse_report.skipped_rows_by_reason}"
+            "[alias/manual] inserted_manual_alias_count="
+            f"{manual_report.inserted_manual_alias_count} "
+            "skipped_redundant_manual_alias_count="
+            f"{manual_report.skipped_redundant_manual_alias_count} "
+            f"path={manual_alias_csv_path}"
         )
-        print(
-            "[alias/wiki] source="
-            f"{source} encoding={encoding} replacements={replacement_count}"
-        )
-        print(
-            "[alias/wiki] unresolved_official_titles_count="
-            f"{unresolved_count} sample={unresolved_sample}"
-        )
-        print(
-            "[alias/wiki] inserted_csv_wiki_alias_count="
-            f"{seed_report.inserted_csv_wiki_alias_count} "
-            f"dedup_skipped_count={seed_report.dedup_skipped_count} "
-            "max_csv_wiki_candidates_per_song="
-            f"{seed_report.max_csv_wiki_candidates_per_song}"
-        )
+    else:
+        print("[alias/manual] skipped (manual_alias_csv_path is None)")
 
     verify_summary = verify_music_title_alias_integrity(conn)
     cur = conn.cursor()
@@ -509,30 +476,9 @@ def rebuild_music_title_aliases(
 
     return {
         "official_alias_count": official_count,
-        "wiki_source": source,
-        "wiki_encoding": encoding,
-        "wiki_decode_replacement_count": replacement_count,
-        "wiki_parsed_rows_total": (
-            parse_report.parsed_rows_total if parse_report is not None else 0
-        ),
-        "wiki_definition_rows": (
-            parse_report.definition_rows if parse_report is not None else 0
-        ),
-        "wiki_skipped_rows_by_reason": (
-            parse_report.skipped_rows_by_reason if parse_report is not None else {}
-        ),
-        "unresolved_official_titles_count": (
-            len(seed_report.unresolved_official_titles) if seed_report is not None else 0
-        ),
-        "unresolved_official_titles_sample": (
-            list(seed_report.unresolved_official_titles[:10]) if seed_report is not None else []
-        ),
-        "inserted_csv_wiki_alias_count": (
-            seed_report.inserted_csv_wiki_alias_count if seed_report is not None else 0
-        ),
-        "dedup_skipped_count": seed_report.dedup_skipped_count if seed_report is not None else 0,
-        "max_csv_wiki_candidates_per_song": (
-            seed_report.max_csv_wiki_candidates_per_song if seed_report is not None else 0
+        "inserted_manual_alias_count": manual_report.inserted_manual_alias_count,
+        "skipped_redundant_manual_alias_count": (
+            manual_report.skipped_redundant_manual_alias_count
         ),
         "alias_ac_music_count": verify_summary.active_ac_music_count,
         "alias_inf_music_count": verify_summary.active_inf_music_count,
@@ -697,7 +643,7 @@ def build_or_update_sqlite(
     reset_flags: bool = True,
     schema_version: str = "1",
     asset_updated_at: str | None = None,
-    bemaniwiki_alias_config: BemaniWikiAliasConfig | None = None,
+    manual_alias_csv_path: str | None = DEFAULT_MANUAL_ALIAS_CSV_PATH,
 ) -> dict:
     """
     Textage テーブルから SQLite DB を構築または更新する。
@@ -780,7 +726,7 @@ def build_or_update_sqlite(
 
     alias_report = rebuild_music_title_aliases(
         conn=conn,
-        bemaniwiki_alias_config=bemaniwiki_alias_config,
+        manual_alias_csv_path=manual_alias_csv_path,
     )
 
     asset_value = asset_updated_at or now_iso()
@@ -799,8 +745,8 @@ def build_or_update_sqlite(
         "chart_processed": chart_processed,
         "ignored": ignored,
         "official_alias_count": alias_report["official_alias_count"],
-        "inserted_csv_wiki_alias_count": alias_report["inserted_csv_wiki_alias_count"],
-        "unresolved_official_titles_count": alias_report[
-            "unresolved_official_titles_count"
+        "inserted_manual_alias_count": alias_report["inserted_manual_alias_count"],
+        "skipped_redundant_manual_alias_count": alias_report[
+            "skipped_redundant_manual_alias_count"
         ],
     }

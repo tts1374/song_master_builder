@@ -114,6 +114,22 @@ def verify_music_title_alias_integrity(conn: sqlite3.Connection) -> AliasVerific
     if orphan_alias_count > 0:
         raise RuntimeError(f"orphan aliases detected: {orphan_alias_count}")
 
+    cur.execute(
+        """
+        SELECT alias_type, COUNT(*) AS c
+        FROM music_title_alias
+        WHERE alias_type NOT IN ('official', 'manual')
+        GROUP BY alias_type
+        ORDER BY alias_type;
+        """
+    )
+    invalid_alias_types = cur.fetchall()
+    if invalid_alias_types:
+        sample = ", ".join(
+            f"{row[0]}:{int(row[1])}" for row in invalid_alias_types[:10]
+        )
+        raise RuntimeError(f"invalid alias_type values detected: {sample}")
+
     return AliasVerificationSummary(
         active_ac_music_count=active_ac_music_count,
         active_inf_music_count=active_inf_music_count,

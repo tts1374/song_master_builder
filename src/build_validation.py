@@ -264,6 +264,25 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
         if orphan_count > 0:
             raise RuntimeError(f"music_title_alias has {orphan_count} orphan rows")
 
+        cur.execute(
+            """
+            SELECT alias_type, COUNT(*) AS c
+            FROM music_title_alias
+            WHERE alias_type NOT IN ('official', 'manual')
+            GROUP BY alias_type
+            ORDER BY alias_type;
+            """
+        )
+        invalid_alias_types = cur.fetchall()
+        if invalid_alias_types:
+            sample = ", ".join(
+                f"{row[0]}:{int(row[1])}" for row in invalid_alias_types[:10]
+            )
+            raise RuntimeError(
+                "music_title_alias has invalid alias_type values: "
+                f"{sample}"
+            )
+
         actual_schema_version = _read_meta_schema_version(conn)
         if expected_schema_version is not None and actual_schema_version != str(
             expected_schema_version
