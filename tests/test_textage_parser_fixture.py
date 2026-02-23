@@ -63,6 +63,24 @@ def test_extract_js_object_handles_eof_line_comment():
 
 
 @pytest.mark.light
+def test_extract_js_object_keeps_double_slash_inside_titletbl_strings():
+    """`//` inside title/genre strings must not be treated as comments."""
+    js = """
+    titletbl={
+      'screwowo':[27,2748,0,"TWERKCORE // uwu // BEATJUGGLE","かめりあ","SCREW // owo // SCREW"],
+      'lightstr':[27,2749,0,"Hi-GAIN ENERGY","BEMANI Sound Team \\"HuΣeR\\"","LIGHTNING STRIKES"],
+      'riffrain':[31,3196,0,"THEME SONG","Rainy。","Riff//rain"],
+      '_rabbith':[31,3197,0,"J-POP","DECO*27","ラビットホール"]
+    };
+    """
+    parsed = _extract_js_object(js, "titletbl")
+    assert parsed["screwowo"][3] == "TWERKCORE // uwu // BEATJUGGLE"
+    assert parsed["lightstr"][5] == "LIGHTNING STRIKES"
+    assert parsed["riffrain"][5] == "Riff//rain"
+    assert parsed["_rabbith"][5] == "ラビットホール"
+
+
+@pytest.mark.light
 def test_charset_from_content_type_extracts_charset_token():
     """Content-Type charset token is parsed correctly."""
     value = "application/javascript; charset=Shift_JIS"

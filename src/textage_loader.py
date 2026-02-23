@@ -14,6 +14,47 @@ ACT_URL = "https://textage.cc/score/actbl.js"
 CONTENT_TYPE_CHARSET_RE = re.compile(r"charset\s*=\s*([A-Za-z0-9._-]+)", flags=re.I)
 
 
+def _strip_js_line_comments(js_text: str) -> str:
+    """Strip JS // comments while preserving // inside string literals."""
+    out: list[str] = []
+    index = 0
+    in_str = False
+    escaped = False
+    str_char = ""
+
+    while index < len(js_text):
+        ch = js_text[index]
+
+        if in_str:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == str_char:
+                in_str = False
+            index += 1
+            continue
+
+        if ch in ('"', "'"):
+            in_str = True
+            str_char = ch
+            out.append(ch)
+            index += 1
+            continue
+
+        if ch == "/" and index + 1 < len(js_text) and js_text[index + 1] == "/":
+            index += 2
+            while index < len(js_text) and js_text[index] != "\n":
+                index += 1
+            continue
+
+        out.append(ch)
+        index += 1
+
+    return "".join(out)
+
+
 # pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
 def _extract_js_object(js_text: str, varname: str) -> dict:
     """
@@ -72,7 +113,7 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     for name, val in consts.items():
         obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", f"-{val}", obj_text)
 
-    obj_text = re.sub(r"//[^\n]*(?=\n|$)", "", obj_text)
+    obj_text = _strip_js_line_comments(obj_text)
     obj_text = re.sub(r"\.fontcolor\([^)]*\)", "", obj_text)
     obj_text = re.sub(r"'([^']*?)'(\s*):", r'"\1"\2:', obj_text)
 
@@ -99,25 +140,18 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
             idx += 1
         return '"' + "".join(out) + '"'
 
-    if varname == "titletbl":
-        result: dict[str, list] = {}
-        entry_re = re.compile(r"['\"]([^'\"]+)['\"]\s*:\s*(\[[^\]]*\])", flags=re.S)
-        for key, arr_text in entry_re.findall(obj_text):
-            try:
-                arr = json.loads(arr_text)
-            except json.JSONDecodeError:
-                continue
-
-            if isinstance(arr, list) and arr:
-                arr[0] = str(arr[0])
-            result[key] = arr
-        return result
-
     obj_text = re.sub(r'"((?:\\.|[^"\\\n])*)"', _escape_ctrl, obj_text)
     try:
-        return json.loads(obj_text)
+        parsed = json.loads(obj_text)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"json parse failed for {varname}: {exc}") from exc
+
+    if varname == "titletbl":
+        for row in parsed.values():
+            if isinstance(row, list) and row:
+                row[0] = str(row[0])
+
+    return parsed
 
 
 def _sha256_hex(data: bytes) -> str:
