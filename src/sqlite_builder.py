@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from src.generator.alias_seed_manual import ManualAliasSeedReport, seed_manual_aliases_from_csv
+from src.generator.alias_seed_manual import seed_manual_aliases_from_csv
 from src.generator.alias_seed_official import reset_music_title_aliases, seed_official_aliases
 from src.verify.alias_verify import verify_music_title_alias_integrity
 
@@ -122,7 +122,10 @@ CHART_TYPES = [
     (10, "DP", "LEGGENDARIA", 21),
 ]
 ACTBL_TITLE_QUALIFIER_INDEX = 23
-DEFAULT_MANUAL_ALIAS_CSV_PATH = "data/music_alias_manual.csv"
+DEFAULT_MANUAL_ALIAS_AC_CSV_PATH = "data/music_alias_manual_ac.csv"
+DEFAULT_MANUAL_ALIAS_INF_CSV_PATH = "data/music_alias_manual_inf.csv"
+# Backward compatibility for existing callers/tests that still import this name.
+DEFAULT_MANUAL_ALIAS_CSV_PATH = DEFAULT_MANUAL_ALIAS_AC_CSV_PATH
 
 
 def download_latest_sqlite_from_release(
@@ -434,30 +437,45 @@ def reset_all_music_active_flags(conn: sqlite3.Connection):
 def rebuild_music_title_aliases(
     conn: sqlite3.Connection,
     manual_alias_csv_path: str | None = DEFAULT_MANUAL_ALIAS_CSV_PATH,
+    manual_alias_csv_paths: list[str] | tuple[str, ...] | None = None,
 ) -> dict:
-    """Rebuild `music_title_alias` from official titles and repository-managed manual CSV."""
+    """Rebuild `music_title_alias` from official titles and repository-managed manual CSV(s)."""
     alias_timestamp = now_utc_iso()
     reset_music_title_aliases(conn)
     official_count = seed_official_aliases(conn, alias_timestamp)
-    manual_report = ManualAliasSeedReport(
-        inserted_manual_alias_count=0,
-        skipped_redundant_manual_alias_count=0,
-    )
-    if manual_alias_csv_path is not None:
-        manual_report = seed_manual_aliases_from_csv(
-            conn=conn,
-            csv_path=manual_alias_csv_path,
-            now_utc_iso=alias_timestamp,
-        )
-        print(
-            "[alias/manual] inserted_manual_alias_count="
-            f"{manual_report.inserted_manual_alias_count} "
-            "skipped_redundant_manual_alias_count="
-            f"{manual_report.skipped_redundant_manual_alias_count} "
-            f"path={manual_alias_csv_path}"
-        )
+    resolved_manual_alias_csv_paths: list[str] = []
+    if manual_alias_csv_paths is not None:
+        resolved_manual_alias_csv_paths = [
+            str(path).strip() for path in manual_alias_csv_paths if str(path).strip()
+        ]
+    elif manual_alias_csv_path is not None:
+        single_path = str(manual_alias_csv_path).strip()
+        if single_path:
+            resolved_manual_alias_csv_paths = [single_path]
+
+    inserted_manual_alias_count = 0
+    skipped_redundant_manual_alias_count = 0
+
+    if resolved_manual_alias_csv_paths:
+        for manual_csv_path in resolved_manual_alias_csv_paths:
+            manual_report = seed_manual_aliases_from_csv(
+                conn=conn,
+                csv_path=manual_csv_path,
+                now_utc_iso=alias_timestamp,
+            )
+            inserted_manual_alias_count += manual_report.inserted_manual_alias_count
+            skipped_redundant_manual_alias_count += (
+                manual_report.skipped_redundant_manual_alias_count
+            )
+            print(
+                "[alias/manual] inserted_manual_alias_count="
+                f"{manual_report.inserted_manual_alias_count} "
+                "skipped_redundant_manual_alias_count="
+                f"{manual_report.skipped_redundant_manual_alias_count} "
+                f"path={manual_csv_path}"
+            )
     else:
-        print("[alias/manual] skipped (manual_alias_csv_path is None)")
+        print("[alias/manual] skipped (manual_alias_csv_paths is empty)")
 
     verify_summary = verify_music_title_alias_integrity(conn)
     cur = conn.cursor()
@@ -477,10 +495,8 @@ def rebuild_music_title_aliases(
 
     return {
         "official_alias_count": official_count,
-        "inserted_manual_alias_count": manual_report.inserted_manual_alias_count,
-        "skipped_redundant_manual_alias_count": (
-            manual_report.skipped_redundant_manual_alias_count
-        ),
+        "inserted_manual_alias_count": inserted_manual_alias_count,
+        "skipped_redundant_manual_alias_count": skipped_redundant_manual_alias_count,
         "alias_ac_music_count": verify_summary.active_ac_music_count,
         "alias_inf_music_count": verify_summary.active_inf_music_count,
         "alias_official_ac_count": verify_summary.official_ac_alias_count,
@@ -645,6 +661,7 @@ def build_or_update_sqlite(
     schema_version: str = "1",
     asset_updated_at: str | None = None,
     manual_alias_csv_path: str | None = DEFAULT_MANUAL_ALIAS_CSV_PATH,
+    manual_alias_csv_paths: list[str] | tuple[str, ...] | None = None,
 ) -> dict:
     """
     Textage テーブルから SQLite DB を構築または更新する。
@@ -728,6 +745,7 @@ def build_or_update_sqlite(
     alias_report = rebuild_music_title_aliases(
         conn=conn,
         manual_alias_csv_path=manual_alias_csv_path,
+        manual_alias_csv_paths=manual_alias_csv_paths,
     )
 
     asset_value = asset_updated_at or now_iso()

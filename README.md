@@ -107,7 +107,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `generated_at` | `string` | 必須 | UTC ISO8601 (`Z` suffix) |
 | `sha256` | `string` | 必須 | SQLite 実体の SHA-256 |
 | `byte_size` | `number` | 必須 | SQLite 実体サイズ（bytes） |
-| `source_hashes` | `object` | 任意 | Textage 3 ソース + manual alias CSV の SHA-256 |
+| `source_hashes` | `object` | 任意 | Textage 3 ソース + AC/INF manual alias CSV の SHA-256 |
 
 ### `source_hashes` サブキー
 
@@ -116,7 +116,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `titletbl.js` | `string` | `titletbl.js` の SHA-256 |
 | `datatbl.js` | `string` | `datatbl.js` の SHA-256 |
 | `actbl.js` | `string` | `actbl.js` の SHA-256 |
-| `manual_alias_csv` | `string` | `music_alias_manual_csv_path` で指定した CSV の SHA-256 |
+| `manual_alias_ac_csv` | `string` | `music_alias_manual_ac_csv_path` で指定した CSV の SHA-256 |
+| `manual_alias_inf_csv` | `string` | `music_alias_manual_inf_csv_path` で指定した CSV の SHA-256 |
 
 ### `latest.json` 整合性検証
 
@@ -178,8 +179,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | --- | --- | --- |
 | 1 | `settings.yaml` 読み込み | 設定 |
 | 2 | 最新リリースから前回 SQLite / `latest.json` 取得（必要時） | 基準データ |
-| 3 | Textage 3 ソース取得 + manual alias CSV ハッシュ計算 | `source_hashes` |
-| 4 | 4 ハッシュ完全一致ならスキップ | スキップ通知 |
+| 3 | Textage 3 ソース取得 + AC/INF manual alias CSV ハッシュ計算 | `source_hashes` |
+| 4 | 5 ハッシュ完全一致ならスキップ | スキップ通知 |
 | 5 | SQLite 更新生成 | `song_master_YYYY-MM-DD.sqlite` |
 | 6 | DB 制約/データ整合性検証 | DB 検証 |
 | 7 | `latest.json` 生成 + 実体突合 | `latest.json` |
@@ -194,7 +195,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `output_db_path` | `song_master.sqlite` | 出力先ディレクトリとファイル stem |
 | `schema_version` | `33` | `meta` / `latest.json` に反映 |
 | `chart_id_missing_policy` | `error` | 旧 DB 比較で欠損時の動作（`error` / `warn`） |
-| `music_alias_manual_csv_path` | `data/music_alias_manual.csv` | 手動エイリアス CSV パス |
+| `music_alias_manual_ac_csv_path` | `data/music_alias_manual_ac.csv` | AC 用手動エイリアス CSV パス |
+| `music_alias_manual_inf_csv_path` | `data/music_alias_manual_inf.csv` | INFINITAS 用手動エイリアス CSV パス |
 
 ### `github` 設定
 
@@ -206,7 +208,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `require_previous_release` | `true` | 前回リリース取得を必須にするか |
 | `asset_name` | `song_master.sqlite` | フォールバック用資産名 |
 
-## 手動エイリアス CSV 仕様（`data/music_alias_manual.csv`）
+## 手動エイリアス CSV 仕様（`data/music_alias_manual_ac.csv` / `data/music_alias_manual_inf.csv`）
 
 ### 列定義
 
@@ -229,6 +231,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | CSV 内重複 | `(alias_scope, alias)` 重複はエラー |
 | 孤立参照 | `music` に存在しない `textage_id` はエラー |
 | DB 衝突 | 一意制約衝突はエラー |
+
+運用上は `music_alias_manual_ac.csv` は `alias_scope=ac`、`music_alias_manual_inf.csv` は `alias_scope=inf` を推奨します。
 
 ## 実行方法
 

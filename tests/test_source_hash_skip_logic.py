@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from main import MANUAL_ALIAS_HASH_KEY, has_same_textage_source_hashes
+from main import (
+    LEGACY_MANUAL_ALIAS_HASH_KEY,
+    MANUAL_ALIAS_AC_HASH_KEY,
+    MANUAL_ALIAS_INF_HASH_KEY,
+    has_same_textage_source_hashes,
+)
 
 
 @pytest.mark.light
@@ -13,46 +18,71 @@ def test_has_same_textage_source_hashes_true_when_all_required_hashes_match():
         "titletbl.js": "a",
         "datatbl.js": "b",
         "actbl.js": "c",
-        MANUAL_ALIAS_HASH_KEY: "d",
+        MANUAL_ALIAS_AC_HASH_KEY: "d",
+        MANUAL_ALIAS_INF_HASH_KEY: "e",
     }
     current = {
         "titletbl.js": "a",
         "datatbl.js": "b",
         "actbl.js": "c",
-        MANUAL_ALIAS_HASH_KEY: "d",
+        MANUAL_ALIAS_AC_HASH_KEY: "d",
+        MANUAL_ALIAS_INF_HASH_KEY: "e",
     }
     assert has_same_textage_source_hashes(previous, current) is True
 
 
 @pytest.mark.light
-def test_has_same_textage_source_hashes_false_when_manual_hash_is_missing_in_previous():
+def test_has_same_textage_source_hashes_false_when_inf_hash_is_missing_in_previous():
     previous = {
         "titletbl.js": "a",
         "datatbl.js": "b",
         "actbl.js": "c",
+        MANUAL_ALIAS_AC_HASH_KEY: "d",
     }
     current = {
         "titletbl.js": "a",
         "datatbl.js": "b",
         "actbl.js": "c",
-        MANUAL_ALIAS_HASH_KEY: "d",
+        MANUAL_ALIAS_AC_HASH_KEY: "d",
+        MANUAL_ALIAS_INF_HASH_KEY: "e",
     }
     assert has_same_textage_source_hashes(previous, current) is False
 
 
 @pytest.mark.light
-def test_has_same_textage_source_hashes_false_when_manual_hash_differs():
+def test_has_same_textage_source_hashes_false_when_ac_hash_differs():
     previous = {
         "titletbl.js": "a",
         "datatbl.js": "b",
         "actbl.js": "c",
-        MANUAL_ALIAS_HASH_KEY: "old",
+        MANUAL_ALIAS_AC_HASH_KEY: "old",
+        MANUAL_ALIAS_INF_HASH_KEY: "e",
     }
     current = {
         "titletbl.js": "a",
         "datatbl.js": "b",
         "actbl.js": "c",
-        MANUAL_ALIAS_HASH_KEY: "new",
+        MANUAL_ALIAS_AC_HASH_KEY: "new",
+        MANUAL_ALIAS_INF_HASH_KEY: "e",
+    }
+    assert has_same_textage_source_hashes(previous, current) is False
+
+
+@pytest.mark.light
+def test_has_same_textage_source_hashes_false_when_inf_hash_differs():
+    previous = {
+        "titletbl.js": "a",
+        "datatbl.js": "b",
+        "actbl.js": "c",
+        MANUAL_ALIAS_AC_HASH_KEY: "d",
+        MANUAL_ALIAS_INF_HASH_KEY: "old",
+    }
+    current = {
+        "titletbl.js": "a",
+        "datatbl.js": "b",
+        "actbl.js": "c",
+        MANUAL_ALIAS_AC_HASH_KEY: "d",
+        MANUAL_ALIAS_INF_HASH_KEY: "new",
     }
     assert has_same_textage_source_hashes(previous, current) is False
 
@@ -63,7 +93,26 @@ def test_has_same_textage_source_hashes_false_when_previous_hashes_is_none():
         "titletbl.js": "a",
         "datatbl.js": "b",
         "actbl.js": "c",
-        MANUAL_ALIAS_HASH_KEY: "d",
+        MANUAL_ALIAS_AC_HASH_KEY: "d",
+        MANUAL_ALIAS_INF_HASH_KEY: "e",
     }
     assert has_same_textage_source_hashes(None, current) is False
 
+
+@pytest.mark.light
+def test_has_same_textage_source_hashes_accepts_legacy_manual_alias_key_for_ac():
+    previous = {
+        "titletbl.js": "a",
+        "datatbl.js": "b",
+        "actbl.js": "c",
+        LEGACY_MANUAL_ALIAS_HASH_KEY: "d",
+        MANUAL_ALIAS_INF_HASH_KEY: "e",
+    }
+    current = {
+        "titletbl.js": "a",
+        "datatbl.js": "b",
+        "actbl.js": "c",
+        MANUAL_ALIAS_AC_HASH_KEY: "d",
+        MANUAL_ALIAS_INF_HASH_KEY: "e",
+    }
+    assert has_same_textage_source_hashes(previous, current) is True

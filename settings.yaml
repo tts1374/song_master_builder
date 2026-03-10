@@ -1,7 +1,8 @@
 output_db_path: "song_master.sqlite"
 schema_version: "33"
 chart_id_missing_policy: "error"
-music_alias_manual_csv_path: "data/music_alias_manual.csv"
+music_alias_manual_ac_csv_path: "data/music_alias_manual_ac.csv"
+music_alias_manual_inf_csv_path: "data/music_alias_manual_inf.csv"
 
 github:
   owner: "tts1374"

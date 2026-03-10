@@ -33,12 +33,20 @@ from src.github_release import (
     get_latest_release,
     publish_files_as_new_date_release,
 )
-from src.sqlite_builder import DEFAULT_MANUAL_ALIAS_CSV_PATH, build_or_update_sqlite
+from src.sqlite_builder import (
+    DEFAULT_MANUAL_ALIAS_AC_CSV_PATH,
+    DEFAULT_MANUAL_ALIAS_INF_CSV_PATH,
+    build_or_update_sqlite,
+)
 from src.textage_loader import fetch_textage_tables_with_hashes
 
 JST = timezone(timedelta(hours=9), "JST")
 LATEST_MANIFEST_NAME = "latest.json"
-MANUAL_ALIAS_HASH_KEY = "manual_alias_csv"
+LEGACY_MANUAL_ALIAS_HASH_KEY = "manual_alias_csv"
+MANUAL_ALIAS_AC_HASH_KEY = "manual_alias_ac_csv"
+MANUAL_ALIAS_INF_HASH_KEY = "manual_alias_inf_csv"
+# Backward compatibility for tests/callers that import this name.
+MANUAL_ALIAS_HASH_KEY = MANUAL_ALIAS_AC_HASH_KEY
 
 
 def now_iso() -> str:
@@ -67,14 +75,25 @@ def has_same_textage_source_hashes(
     previous_hashes: dict[str, str] | None,
     current_hashes: dict[str, str],
 ) -> bool:
-    """Textage 3 files + manual alias CSV hash are all unchanged."""
+    """Textage 3 files + AC/INF manual alias CSV hashes are all unchanged."""
     if not previous_hashes:
         return False
 
-    required_keys = ("titletbl.js", "datatbl.js", "actbl.js", MANUAL_ALIAS_HASH_KEY)
+    required_keys = ("titletbl.js", "datatbl.js", "actbl.js")
     for key in required_keys:
         if previous_hashes.get(key) != current_hashes.get(key):
             return False
+
+    previous_ac_hash = previous_hashes.get(MANUAL_ALIAS_AC_HASH_KEY)
+    if previous_ac_hash is None:
+        previous_ac_hash = previous_hashes.get(LEGACY_MANUAL_ALIAS_HASH_KEY)
+
+    if previous_ac_hash != current_hashes.get(MANUAL_ALIAS_AC_HASH_KEY):
+        return False
+    if previous_hashes.get(MANUAL_ALIAS_INF_HASH_KEY) != current_hashes.get(
+        MANUAL_ALIAS_INF_HASH_KEY
+    ):
+        return False
     return True
 
 
@@ -165,11 +184,34 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
         output_db_path = settings.get("output_db_path", "song_master.sqlite")
         schema_version = str(settings.get("schema_version", "1"))
         chart_id_missing_policy = str(settings.get("chart_id_missing_policy", "error"))
-        manual_alias_csv_path = str(
-            settings.get("music_alias_manual_csv_path", DEFAULT_MANUAL_ALIAS_CSV_PATH)
-        ).strip() or DEFAULT_MANUAL_ALIAS_CSV_PATH
-        if not os.path.exists(manual_alias_csv_path):
-            raise RuntimeError(f"manual alias CSV not found: {manual_alias_csv_path}")
+        legacy_manual_alias_csv_path = str(
+            settings.get("music_alias_manual_csv_path", "")
+        ).strip()
+        default_ac_manual_alias_csv_path = (
+            legacy_manual_alias_csv_path or DEFAULT_MANUAL_ALIAS_AC_CSV_PATH
+        )
+        manual_alias_ac_csv_path = (
+            str(
+                settings.get(
+                    "music_alias_manual_ac_csv_path",
+                    default_ac_manual_alias_csv_path,
+                )
+            ).strip()
+            or default_ac_manual_alias_csv_path
+        )
+        manual_alias_inf_csv_path = (
+            str(
+                settings.get(
+                    "music_alias_manual_inf_csv_path",
+                    DEFAULT_MANUAL_ALIAS_INF_CSV_PATH,
+                )
+            ).strip()
+            or DEFAULT_MANUAL_ALIAS_INF_CSV_PATH
+        )
+        manual_alias_csv_paths = [manual_alias_ac_csv_path, manual_alias_inf_csv_path]
+        for manual_alias_csv_path in manual_alias_csv_paths:
+            if not os.path.exists(manual_alias_csv_path):
+                raise RuntimeError(f"manual alias CSV not found: {manual_alias_csv_path}")
 
         github_cfg = settings.get("github", {})
         owner = github_cfg.get("owner")
@@ -224,7 +266,8 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
 
             titletbl, datatbl, actbl, textage_source_hashes = fetch_textage_tables_with_hashes()
             source_hashes = dict(textage_source_hashes)
-            source_hashes[MANUAL_ALIAS_HASH_KEY] = file_sha256(manual_alias_csv_path)
+            source_hashes[MANUAL_ALIAS_AC_HASH_KEY] = file_sha256(manual_alias_ac_csv_path)
+            source_hashes[MANUAL_ALIAS_INF_HASH_KEY] = file_sha256(manual_alias_inf_csv_path)
 
             if has_same_textage_source_hashes(previous_source_hashes, source_hashes):
                 if discord_webhook:
@@ -233,12 +276,12 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                         "\n".join(
                             [
                                 "song master build をスキップしました",
-                                "- 理由: Textage + manual alias CSV ソースハッシュが未変更",
+                                "- 理由: Textage + AC/INF manual alias CSV ソースハッシュが未変更",
                                 f"- 時刻: {now_iso()}",
                             ]
                         ),
                     )
-                print("SKIPPED: source hashes unchanged (Textage + manual alias CSV)")
+                print("SKIPPED: source hashes unchanged (Textage + AC/INF manual alias CSV)")
                 return
 
             if previous_info:
@@ -254,7 +297,7 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 reset_flags=True,
                 schema_version=schema_version,
                 asset_updated_at=previous_asset_updated_at,
-                manual_alias_csv_path=manual_alias_csv_path,
+                manual_alias_csv_paths=manual_alias_csv_paths,
             )
 
             validate_db_schema_and_data(

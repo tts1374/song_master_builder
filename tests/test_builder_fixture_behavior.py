@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import sqlite3
 import time
 from pathlib import Path
@@ -63,6 +64,24 @@ def _read_music_row(conn: sqlite3.Connection, textage_id: str) -> tuple:
         """,
         (textage_id,),
     ).fetchone()
+
+
+def _write_manual_alias_csv(path: Path, rows: list[dict]) -> Path:
+    with path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(
+            file_obj,
+            fieldnames=[
+                "textage_id",
+                "alias",
+                "alias_scope",
+                "alias_type",
+                "note",
+            ],
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+    return path
 
 
 @pytest.mark.light
@@ -196,6 +215,76 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
             WHERE type='index' AND name='uq_music_title_alias_textage_scope_alias';
             """
         ).fetchone() is not None
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_build_inserts_manual_aliases_from_multiple_csv_paths(tmp_path: Path):
+    """manual_alias_csv_paths で複数CSVを投入できることを確認する。"""
+    sqlite_path = tmp_path / "manual_alias_multi.sqlite"
+    ac_csv_path = _write_manual_alias_csv(
+        tmp_path / "music_alias_manual_ac.csv",
+        [
+            {
+                "textage_id": "song_ac",
+                "alias": "Alias AC",
+                "alias_scope": "ac",
+                "alias_type": "manual",
+                "note": "",
+            }
+        ],
+    )
+    inf_csv_path = _write_manual_alias_csv(
+        tmp_path / "music_alias_manual_inf.csv",
+        [
+            {
+                "textage_id": "song_inf",
+                "alias": "Alias INF",
+                "alias_scope": "inf",
+                "alias_type": "manual",
+                "note": "",
+            }
+        ],
+    )
+
+    titletbl = {
+        "song_ac": _make_title_row(title="Song AC"),
+        "song_inf": _make_title_row(title="Song INF"),
+    }
+    datatbl = {key: _make_data_row() for key in titletbl}
+    actbl = {
+        "song_ac": _make_act_row(flags_hex="01"),
+        "song_inf": _make_act_row(flags_hex="02"),
+    }
+
+    result = build_or_update_sqlite(
+        sqlite_path=str(sqlite_path),
+        titletbl=titletbl,
+        datatbl=datatbl,
+        actbl=actbl,
+        schema_version="33",
+        manual_alias_csv_path=None,
+        manual_alias_csv_paths=[str(ac_csv_path), str(inf_csv_path)],
+    )
+
+    assert result["inserted_manual_alias_count"] == 2
+    assert result["skipped_redundant_manual_alias_count"] == 0
+
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        rows = conn.execute(
+            """
+            SELECT alias_scope, textage_id, alias
+            FROM music_title_alias
+            WHERE alias_type='manual'
+            ORDER BY alias_scope, textage_id;
+            """
+        ).fetchall()
+        assert rows == [
+            ("ac", "song_ac", "Alias AC"),
+            ("inf", "song_inf", "Alias INF"),
+        ]
     finally:
         conn.close()
 
