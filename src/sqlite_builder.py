@@ -122,10 +122,61 @@ CHART_TYPES = [
     (10, "DP", "LEGGENDARIA", 21),
 ]
 ACTBL_TITLE_QUALIFIER_INDEX = 23
+SONG_FLAG_AC = 0x01
+SONG_FLAG_INF = 0x02
+SONG_FLAG_INF_BEGINNER = 0x04
+SONG_FLAG_INF_LEGGENDARIA = 0x08
+CHART_OPT_AC_AVAILABLE = 0x04
+LEGGENDARIA_CHART_TYPES = {5, 10}
 DEFAULT_MANUAL_ALIAS_AC_CSV_PATH = "data/music_alias_manual_ac.csv"
 DEFAULT_MANUAL_ALIAS_INF_CSV_PATH = "data/music_alias_manual_inf.csv"
 # Backward compatibility for existing callers/tests that still import this name.
 DEFAULT_MANUAL_ALIAS_CSV_PATH = DEFAULT_MANUAL_ALIAS_AC_CSV_PATH
+
+
+def _parse_textage_hex_or_int(value: object) -> int:
+    """Parse Textage value that may be int or base16 token string."""
+    if isinstance(value, int):
+        return value
+    return int(str(value), 16)
+
+
+def _resolve_chart_scope_activity(
+    *,
+    song_flags: int,
+    chart_type: int,
+    level: int,
+    chart_opt: int,
+) -> tuple[int, int]:
+    """
+    Resolve AC/INF chart activity by Textage's scrlist.js logic.
+
+    - `level <= 0` is always inactive for both scopes.
+    - AC chart requires song AC flag and chart AC-available flag.
+    - INF chart follows song/option gates, plus BEGINNER/LEGGENDARIA scope gates.
+    """
+    if level <= 0:
+        return 0, 0
+
+    is_ac_active = (
+        1
+        if (song_flags & SONG_FLAG_AC) and (chart_opt & CHART_OPT_AC_AVAILABLE)
+        else 0
+    )
+
+    is_inf_active = 0
+    if (song_flags & SONG_FLAG_INF) != 0:
+        if (chart_opt & CHART_OPT_AC_AVAILABLE) != 0 or (
+            song_flags & SONG_FLAG_INF_LEGGENDARIA
+        ) != 0:
+            if chart_type > 1 or (song_flags & SONG_FLAG_INF_BEGINNER) != 0:
+                if (
+                    chart_type not in LEGGENDARIA_CHART_TYPES
+                    or (song_flags & SONG_FLAG_INF_LEGGENDARIA) != 0
+                ):
+                    is_inf_active = 1
+
+    return is_ac_active, is_inf_active
 
 
 def download_latest_sqlite_from_release(
@@ -307,6 +358,8 @@ def ensure_schema(conn: sqlite3.Connection):
         level INTEGER NOT NULL,
         notes INTEGER NOT NULL,
         is_active INTEGER NOT NULL,
+        is_ac_active INTEGER NOT NULL,
+        is_inf_active INTEGER NOT NULL,
         last_seen_at TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -361,6 +414,12 @@ def ensure_schema(conn: sqlite3.Connection):
         cur.execute(
             "ALTER TABLE music_title_alias ADD COLUMN alias_scope TEXT NOT NULL DEFAULT 'ac'"
         )
+
+    if _table_exists(conn, "chart") and not _column_exists(conn, "chart", "is_ac_active"):
+        cur.execute("ALTER TABLE chart ADD COLUMN is_ac_active INTEGER NOT NULL DEFAULT 0")
+
+    if _table_exists(conn, "chart") and not _column_exists(conn, "chart", "is_inf_active"):
+        cur.execute("ALTER TABLE chart ADD COLUMN is_inf_active INTEGER NOT NULL DEFAULT 0")
 
     _backfill_title_search_keys(conn)
 
@@ -590,6 +649,8 @@ def upsert_chart(
     level: int,
     notes: int,
     is_active: int,
+    is_ac_active: int,
+    is_inf_active: int,
 ) -> None:
     """chart 1件を Upsert する。"""
     cur = conn.cursor()
@@ -609,10 +670,10 @@ def upsert_chart(
             """
         INSERT INTO chart (
             music_id, play_style, difficulty,
-            level, notes, is_active,
+            level, notes, is_active, is_ac_active, is_inf_active,
             last_seen_at, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 music_id,
@@ -621,6 +682,8 @@ def upsert_chart(
                 level,
                 notes,
                 is_active,
+                is_ac_active,
+                is_inf_active,
                 now,
                 now,
                 now,
@@ -634,6 +697,8 @@ def upsert_chart(
         level = ?,
         notes = ?,
         is_active = ?,
+        is_ac_active = ?,
+        is_inf_active = ?,
         last_seen_at = ?,
         updated_at = ?
     WHERE music_id = ? AND play_style = ? AND difficulty = ?
@@ -642,6 +707,8 @@ def upsert_chart(
             level,
             notes,
             is_active,
+            is_ac_active,
+            is_inf_active,
             now,
             now,
             music_id,
@@ -700,10 +767,9 @@ def build_or_update_sqlite(
                 title = f"{title} {subtitle}"
 
         act_row = actbl[tag]
-        value = act_row[0]
-        flags = value if isinstance(value, int) else int(value, 16)
-        is_ac_active = 1 if (flags & 0x01) else 0
-        is_inf_active = 1 if (flags & 0x02) else 0
+        flags = _parse_textage_hex_or_int(act_row[0])
+        is_ac_active = 1 if (flags & SONG_FLAG_AC) else 0
+        is_inf_active = 1 if (flags & SONG_FLAG_INF) else 0
 
         music_id = upsert_music(
             conn,
@@ -720,11 +786,17 @@ def build_or_update_sqlite(
             explicit_title_qualifier_by_textage_id[textage_id] = explicit_qualifier
         music_processed += 1
 
-        for chart_type, play_style, difficulty, _ in CHART_TYPES:
+        for chart_type, play_style, difficulty, act_index in CHART_TYPES:
             notes = datatbl[tag][chart_type]
-            lv_hex = act_row[chart_type * 2 + 1]
-            lv_int = lv_hex if isinstance(lv_hex, int) else int(str(lv_hex), 16)
+            lv_int = _parse_textage_hex_or_int(act_row[act_index])
+            chart_opt = _parse_textage_hex_or_int(act_row[act_index + 1])
             is_active = 1 if lv_int > 0 else 0
+            chart_is_ac_active, chart_is_inf_active = _resolve_chart_scope_activity(
+                song_flags=flags,
+                chart_type=chart_type,
+                level=lv_int,
+                chart_opt=chart_opt,
+            )
 
             upsert_chart(
                 conn=conn,
@@ -734,6 +806,8 @@ def build_or_update_sqlite(
                 level=lv_int,
                 notes=int(notes),
                 is_active=is_active,
+                is_ac_active=chart_is_ac_active,
+                is_inf_active=chart_is_inf_active,
             )
             chart_processed += 1
 

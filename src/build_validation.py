@@ -1,4 +1,4 @@
-﻿"""Validation helpers for SQLite artifacts and latest.json manifest."""
+"""Validation helpers for SQLite artifacts and latest.json manifest."""
 
 from __future__ import annotations
 
@@ -146,6 +146,8 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
         _assert_not_null_column(conn, "music", "textage_id")
         _assert_not_null_column(conn, "music", "title_qualifier")
         _assert_not_null_column(conn, "music", "title_search_key")
+        _assert_not_null_column(conn, "chart", "is_ac_active")
+        _assert_not_null_column(conn, "chart", "is_inf_active")
         _assert_not_null_column(conn, "music_title_alias", "textage_id")
         _assert_not_null_column(conn, "music_title_alias", "alias_scope")
         _assert_not_null_column(conn, "music_title_alias", "alias")
@@ -264,6 +266,53 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
         orphan_count = int(cur.fetchone()[0])
         if orphan_count > 0:
             raise RuntimeError(f"music_title_alias has {orphan_count} orphan rows")
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM chart
+            WHERE is_active = 0
+              AND (is_ac_active = 1 OR is_inf_active = 1);
+            """
+        )
+        inconsistent_chart_scope_count = int(cur.fetchone()[0])
+        if inconsistent_chart_scope_count > 0:
+            raise RuntimeError(
+                "chart has scoped active rows while is_active=0: "
+                f"{inconsistent_chart_scope_count}"
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM chart c
+            INNER JOIN music m ON m.music_id = c.music_id
+            WHERE c.is_ac_active = 1
+              AND m.is_ac_active = 0;
+            """
+        )
+        ac_scope_orphan_count = int(cur.fetchone()[0])
+        if ac_scope_orphan_count > 0:
+            raise RuntimeError(
+                "chart.is_ac_active=1 exists under music.is_ac_active=0: "
+                f"{ac_scope_orphan_count}"
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM chart c
+            INNER JOIN music m ON m.music_id = c.music_id
+            WHERE c.is_inf_active = 1
+              AND m.is_inf_active = 0;
+            """
+        )
+        inf_scope_orphan_count = int(cur.fetchone()[0])
+        if inf_scope_orphan_count > 0:
+            raise RuntimeError(
+                "chart.is_inf_active=1 exists under music.is_inf_active=0: "
+                f"{inf_scope_orphan_count}"
+            )
 
         cur.execute(
             """

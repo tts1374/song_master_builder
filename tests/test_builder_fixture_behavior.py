@@ -40,16 +40,22 @@ def _make_act_row(
     *,
     flags_hex: str = "03",
     default_level_hex: str = "5",
+    default_option_hex: str = "0",
     level_overrides: dict[int, str] | None = None,
+    option_overrides: dict[int, str] | None = None,
     title_qualifier: str | None = None,
 ) -> list:
     row = [0] * 24
     row[0] = flags_hex
     for chart_type, _, _, _ in CHART_TYPES:
         row[chart_type * 2 + 1] = default_level_hex
+        row[chart_type * 2 + 2] = default_option_hex
     if level_overrides:
         for chart_type, lv_hex in level_overrides.items():
             row[chart_type * 2 + 1] = lv_hex
+    if option_overrides:
+        for chart_type, opt_hex in option_overrides.items():
+            row[chart_type * 2 + 2] = opt_hex
     if title_qualifier is not None:
         row[23] = title_qualifier
     return row
@@ -170,6 +176,14 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
         assert cols["textage_id"][3] == 1
         assert cols["title_qualifier"][3] == 1
         assert cols["title_search_key"][3] == 1
+
+        chart_cols = {row[1]: row for row in conn.execute("PRAGMA table_info(chart);").fetchall()}
+        assert "is_active" in chart_cols
+        assert "is_ac_active" in chart_cols
+        assert "is_inf_active" in chart_cols
+        assert chart_cols["is_active"][3] == 1
+        assert chart_cols["is_ac_active"][3] == 1
+        assert chart_cols["is_inf_active"][3] == 1
 
         idx = conn.execute(
             """
@@ -348,9 +362,9 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
         ).fetchone()[0]
         assert duplicated == 0
 
-        is_active = conn.execute(
+        row = conn.execute(
             """
-            SELECT c.is_active
+            SELECT c.is_active, c.is_ac_active, c.is_inf_active
             FROM chart c
             INNER JOIN music m ON m.music_id = c.music_id
             WHERE m.textage_id = ?
@@ -358,8 +372,84 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
               AND c.difficulty = 'NORMAL'
             """,
             (textage_id,),
-        ).fetchone()[0]
-        assert is_active == 0
+        ).fetchone()
+        assert row == (0, 0, 0)
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_build_sets_chart_scope_flags_from_song_flags_and_chart_options(tmp_path: Path):
+    """AC/INF 譜面収録フラグが actbl の曲/譜面フラグから算出されることを確認する。"""
+    sqlite_path = tmp_path / "chart_scope_flags.sqlite"
+    titletbl = {
+        "both_leg": _make_title_row(title="Both Leg"),
+        "ac_only_leg": _make_title_row(title="AC Only Leg"),
+        "inf_only_leg": _make_title_row(title="INF Only Leg"),
+        "alba_like": _make_title_row(title="ALBA Like"),
+        "beatjugg_like": _make_title_row(title="Beatjugg Like"),
+    }
+    datatbl = {key: _make_data_row() for key in titletbl}
+    actbl = {
+        # A MINSTREL 系: AC/INF ともに DP LEGGENDARIA あり
+        "both_leg": _make_act_row(
+            flags_hex="0B",
+            level_overrides={10: "C"},
+            option_overrides={10: "F"},
+        ),
+        # Lisa-RICCIA 系: AC のみ
+        "ac_only_leg": _make_act_row(
+            flags_hex="01",
+            level_overrides={10: "C"},
+            option_overrides={10: "F"},
+        ),
+        # concon 系: INF のみ
+        "inf_only_leg": _make_act_row(
+            flags_hex="0A",
+            level_overrides={10: "C"},
+            option_overrides={10: "B"},
+        ),
+        # ALBA 系: 曲は AC/INF にあるが INF LEGGENDARIA は無い
+        "alba_like": _make_act_row(
+            flags_hex="03",
+            level_overrides={10: "C"},
+            option_overrides={10: "F"},
+        ),
+        # Beat Juggling Mix 系: AC 譜面なし / INF 譜面あり
+        "beatjugg_like": _make_act_row(
+            flags_hex="0B",
+            level_overrides={10: "C"},
+            option_overrides={10: "3"},
+        ),
+    }
+
+    build_or_update_sqlite(
+        sqlite_path=str(sqlite_path),
+        titletbl=titletbl,
+        datatbl=datatbl,
+        actbl=actbl,
+        schema_version="33",
+        manual_alias_csv_path=None,
+    )
+
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.textage_id, c.is_active, c.is_ac_active, c.is_inf_active
+            FROM chart c
+            INNER JOIN music m ON m.music_id = c.music_id
+            WHERE c.play_style = 'DP' AND c.difficulty = 'LEGGENDARIA'
+            ORDER BY m.textage_id;
+            """
+        ).fetchall()
+        assert rows == [
+            ("ac_only_leg", 1, 1, 0),
+            ("alba_like", 1, 1, 0),
+            ("beatjugg_like", 1, 0, 1),
+            ("both_leg", 1, 1, 1),
+            ("inf_only_leg", 1, 0, 1),
+        ]
     finally:
         conn.close()
 

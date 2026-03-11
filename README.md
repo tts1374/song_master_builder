@@ -26,7 +26,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | テーブル | 主用途 | 主キー/一意制約 | 備考 |
 | --- | --- | --- | --- |
 | `music` | 曲単位のマスター情報 | `music_id` (PK), `textage_id` (UNIQUE) | `title_search_key`, `title_qualifier` を保持 |
-| `chart` | 譜面単位の情報 | `chart_id` (PK), `(music_id, play_style, difficulty)` (UNIQUE) | SP/DP 各難易度のレベル・ノーツ・有効フラグ |
+| `chart` | 譜面単位の情報 | `chart_id` (PK), `(music_id, play_style, difficulty)` (UNIQUE) | SP/DP 各難易度のレベル・ノーツ・全体/AC/INF 有効フラグ |
 | `music_title_alias` | タイトル同定用エイリアス | `alias_id` (PK), `(alias_scope, alias)` (UNIQUE), `(textage_id, alias_scope, alias)` (UNIQUE) | `official` / `manual` を保持 |
 | `meta` | 生成メタデータ | なし（単一最新行運用） | `schema_version`, `asset_updated_at`, `generated_at` |
 
@@ -58,7 +58,9 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `difficulty` | `TEXT` | NOT NULL |  | 難易度 |
 | `level` | `INTEGER` | NOT NULL |  | レベル |
 | `notes` | `INTEGER` | NOT NULL |  | ノーツ数 |
-| `is_active` | `INTEGER` | NOT NULL |  | 有効フラグ（0/1） |
+| `is_active` | `INTEGER` | NOT NULL |  | 全体有効フラグ（レベル>0 の譜面存在フラグ）（0/1） |
+| `is_ac_active` | `INTEGER` | NOT NULL |  | AC 収録有効フラグ（0/1） |
+| `is_inf_active` | `INTEGER` | NOT NULL |  | INFINITAS 収録有効フラグ（0/1） |
 | `last_seen_at` | `TEXT` | NOT NULL |  | 最終確認時刻 |
 | `created_at` | `TEXT` | NOT NULL |  | 作成時刻 |
 | `updated_at` | `TEXT` | NOT NULL |  | 更新時刻 |
