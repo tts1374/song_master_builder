@@ -34,6 +34,8 @@ from src.github_release import (
     publish_files_as_new_date_release,
 )
 from src.sqlite_builder import (
+    DEFAULT_INF_MUSIC_INDEX_URL,
+    DEFAULT_INF_PACK_CSV_PATH,
     DEFAULT_MANUAL_ALIAS_AC_CSV_PATH,
     DEFAULT_MANUAL_ALIAS_INF_CSV_PATH,
     build_or_update_sqlite,
@@ -45,6 +47,7 @@ LATEST_MANIFEST_NAME = "latest.json"
 LEGACY_MANUAL_ALIAS_HASH_KEY = "manual_alias_csv"
 MANUAL_ALIAS_AC_HASH_KEY = "manual_alias_ac_csv"
 MANUAL_ALIAS_INF_HASH_KEY = "manual_alias_inf_csv"
+INF_PACK_HASH_KEY = "inf_pack_csv"
 # Backward compatibility for tests/callers that import this name.
 MANUAL_ALIAS_HASH_KEY = MANUAL_ALIAS_AC_HASH_KEY
 
@@ -75,7 +78,7 @@ def has_same_textage_source_hashes(
     previous_hashes: dict[str, str] | None,
     current_hashes: dict[str, str],
 ) -> bool:
-    """Textage 3 files + AC/INF manual alias CSV hashes are all unchanged."""
+    """Textage + manual alias + inf_pack CSV hashes are all unchanged."""
     if not previous_hashes:
         return False
 
@@ -92,6 +95,10 @@ def has_same_textage_source_hashes(
         return False
     if previous_hashes.get(MANUAL_ALIAS_INF_HASH_KEY) != current_hashes.get(
         MANUAL_ALIAS_INF_HASH_KEY
+    ):
+        return False
+    if previous_hashes.get(INF_PACK_HASH_KEY) != current_hashes.get(
+        INF_PACK_HASH_KEY
     ):
         return False
     return True
@@ -213,6 +220,18 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
             if not os.path.exists(manual_alias_csv_path):
                 raise RuntimeError(f"manual alias CSV not found: {manual_alias_csv_path}")
 
+        inf_pack_csv_path = (
+            str(settings.get("inf_pack_csv_path", DEFAULT_INF_PACK_CSV_PATH)).strip()
+            or DEFAULT_INF_PACK_CSV_PATH
+        )
+        if not os.path.exists(inf_pack_csv_path):
+            raise RuntimeError(f"inf_pack CSV not found: {inf_pack_csv_path}")
+
+        inf_music_index_url = (
+            str(settings.get("inf_music_index_url", DEFAULT_INF_MUSIC_INDEX_URL)).strip()
+            or DEFAULT_INF_MUSIC_INDEX_URL
+        )
+
         github_cfg = settings.get("github", {})
         owner = github_cfg.get("owner")
         repo = github_cfg.get("repo")
@@ -226,8 +245,19 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
         if not owner or not repo:
             raise RuntimeError("settings.yaml: github.owner / github.repo は必須です")
 
-        token = os.environ["GITHUB_TOKEN"]
+        token = str(os.environ.get("GITHUB_TOKEN") or "").strip() or None
         discord_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+
+        if token is None and require_previous_release:
+            print(
+                "[local] GITHUB_TOKEN is not set; forcing github.require_previous_release=false"
+            )
+            require_previous_release = False
+        if token is None and upload_to_release:
+            print(
+                "[local] GITHUB_TOKEN is not set; forcing github.upload_to_release=false"
+            )
+            upload_to_release = False
         repo_full = f"{owner}/{repo}"
         generated_utc = datetime.now(timezone.utc)
         generated_at = generated_utc.isoformat().replace("+00:00", "Z")
@@ -243,14 +273,18 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
         os.makedirs(os.path.dirname(sqlite_path) or ".", exist_ok=True)
 
         with tempfile.TemporaryDirectory() as working_dir:
-            previous_info = download_previous_sqlite_from_release(
-                repo_full=repo_full,
-                token=token,
-                working_dir=working_dir,
-                latest_manifest_name=LATEST_MANIFEST_NAME,
-                fallback_asset_name=fallback_asset_name,
-                required=require_previous_release,
-            )
+            previous_info = None
+            if token is not None:
+                previous_info = download_previous_sqlite_from_release(
+                    repo_full=repo_full,
+                    token=token,
+                    working_dir=working_dir,
+                    latest_manifest_name=LATEST_MANIFEST_NAME,
+                    fallback_asset_name=fallback_asset_name,
+                    required=require_previous_release,
+                )
+            else:
+                print("[local] skip previous release download because GITHUB_TOKEN is not set")
 
             previous_sqlite_path = None
             previous_asset_updated_at = None
@@ -268,6 +302,7 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
             source_hashes = dict(textage_source_hashes)
             source_hashes[MANUAL_ALIAS_AC_HASH_KEY] = file_sha256(manual_alias_ac_csv_path)
             source_hashes[MANUAL_ALIAS_INF_HASH_KEY] = file_sha256(manual_alias_inf_csv_path)
+            source_hashes[INF_PACK_HASH_KEY] = file_sha256(inf_pack_csv_path)
 
             if has_same_textage_source_hashes(previous_source_hashes, source_hashes):
                 if discord_webhook:
@@ -276,12 +311,12 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                         "\n".join(
                             [
                                 "song master build をスキップしました",
-                                "- 理由: Textage + AC/INF manual alias CSV ソースハッシュが未変更",
+                                "- 理由: Textage + AC/INF manual alias CSV + inf_pack CSV ソースハッシュが未変更",
                                 f"- 時刻: {now_iso()}",
                             ]
                         ),
                     )
-                print("SKIPPED: source hashes unchanged (Textage + AC/INF manual alias CSV)")
+                print("SKIPPED: source hashes unchanged (Textage + AC/INF manual alias CSV + inf_pack CSV)")
                 return
 
             if previous_info:
@@ -298,6 +333,8 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 schema_version=schema_version,
                 asset_updated_at=previous_asset_updated_at,
                 manual_alias_csv_paths=manual_alias_csv_paths,
+                inf_music_index_url=inf_music_index_url,
+                inf_pack_csv_path=inf_pack_csv_path,
             )
 
             validate_db_schema_and_data(
@@ -329,6 +366,10 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
 
         published_release = None
         if upload_to_release:
+            if token is None:
+                raise RuntimeError(
+                    "github.upload_to_release=true requires GITHUB_TOKEN"
+                )
             published_release = publish_files_as_new_date_release(
                 repo=repo_full,
                 token=token,
@@ -348,6 +389,8 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 f"- manual_alias_count: {result['inserted_manual_alias_count']}",
                 "- manual_alias_redundant_skipped_count: "
                 f"{result['skipped_redundant_manual_alias_count']}",
+                f"- inf_pack_seeded_rows: {result.get('inf_pack_seed', {}).get('db_row_count', 0)}",
+                f"- inf_unlock_updated_rows: {result.get('inf_unlock', {}).get('updated_music_rows', 0)}",
                 f"- chart_id_checked: {'yes' if chart_check else 'no'}",
                 f"- generated_at: {manifest['generated_at']}",
                 f"- sha256: {manifest['sha256']}",

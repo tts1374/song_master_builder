@@ -152,6 +152,11 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
         _assert_not_null_column(conn, "music_title_alias", "alias_scope")
         _assert_not_null_column(conn, "music_title_alias", "alias")
         _assert_not_null_column(conn, "music_title_alias", "alias_type")
+        _assert_not_null_column(conn, "inf_pack", "pack_code")
+        _assert_not_null_column(conn, "inf_pack", "pack_name")
+        _assert_not_null_column(conn, "inf_pack", "display_order")
+        _assert_not_null_column(conn, "inf_pack", "created_at")
+        _assert_not_null_column(conn, "inf_pack", "updated_at")
 
         if not _has_unique_index(conn, "music", ["textage_id"]):
             raise RuntimeError("music.textage_id unique index is missing")
@@ -162,13 +167,24 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
         if not _has_unique_index(conn, "music_title_alias", ["alias_scope", "alias"]):
             raise RuntimeError("music_title_alias(alias_scope, alias) unique index is missing")
 
+        if not _has_unique_index(conn, "inf_pack", ["pack_code"]):
+            raise RuntimeError("inf_pack.pack_code unique index is missing")
+
         _assert_index_exists(conn, "music", "idx_music_title_search_key")
+        _assert_index_exists(conn, "music", "idx_music_inf_pack_id")
         _assert_index_exists(conn, "music_title_alias", "idx_music_title_alias_textage_id")
         _assert_index_exists(conn, "music_title_alias", "uq_music_title_alias_scope_alias")
         _assert_index_exists(conn, "music_title_alias", "idx_music_title_alias_scope_alias")
         _assert_index_exists(conn, "music_title_alias", "uq_music_title_alias_textage_scope_alias")
 
         cur = conn.cursor()
+
+        cur.execute("PRAGMA table_info(music);")
+        music_columns = {row[1] for row in cur.fetchall()}
+        if "inf_unlock_type" not in music_columns:
+            raise RuntimeError("column not found: music.inf_unlock_type")
+        if "inf_pack_id" not in music_columns:
+            raise RuntimeError("column not found: music.inf_pack_id")
 
         cur.execute("SELECT COUNT(*) FROM music WHERE title_search_key IS NULL;")
         null_count = int(cur.fetchone()[0])
@@ -312,6 +328,82 @@ def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str |
             raise RuntimeError(
                 "chart.is_inf_active=1 exists under music.is_inf_active=0: "
                 f"{inf_scope_orphan_count}"
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music
+            WHERE inf_unlock_type IS NOT NULL
+              AND inf_unlock_type NOT IN ('initial', 'djp', 'bit', 'pack');
+            """
+        )
+        invalid_inf_unlock_type_count = int(cur.fetchone()[0])
+        if invalid_inf_unlock_type_count > 0:
+            raise RuntimeError(
+                "music has invalid inf_unlock_type values: "
+                f"{invalid_inf_unlock_type_count}"
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music
+            WHERE is_inf_active = 0
+              AND (inf_unlock_type IS NOT NULL OR inf_pack_id IS NOT NULL);
+            """
+        )
+        inactive_with_inf_unlock_count = int(cur.fetchone()[0])
+        if inactive_with_inf_unlock_count > 0:
+            raise RuntimeError(
+                "music has is_inf_active=0 rows with inf_unlock_type/inf_pack_id: "
+                f"{inactive_with_inf_unlock_count}"
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music
+            WHERE inf_unlock_type = 'pack'
+              AND inf_pack_id IS NULL;
+            """
+        )
+        pack_without_pack_id_count = int(cur.fetchone()[0])
+        if pack_without_pack_id_count > 0:
+            raise RuntimeError(
+                "music has inf_unlock_type='pack' rows without inf_pack_id: "
+                f"{pack_without_pack_id_count}"
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music
+            WHERE inf_unlock_type IN ('initial', 'djp', 'bit')
+              AND inf_pack_id IS NOT NULL;
+            """
+        )
+        non_pack_with_pack_id_count = int(cur.fetchone()[0])
+        if non_pack_with_pack_id_count > 0:
+            raise RuntimeError(
+                "music has non-pack inf_unlock_type rows with inf_pack_id: "
+                f"{non_pack_with_pack_id_count}"
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM music m
+            LEFT JOIN inf_pack p ON p.inf_pack_id = m.inf_pack_id
+            WHERE m.inf_pack_id IS NOT NULL
+              AND p.inf_pack_id IS NULL;
+            """
+        )
+        unknown_inf_pack_id_count = int(cur.fetchone()[0])
+        if unknown_inf_pack_id_count > 0:
+            raise RuntimeError(
+                "music has inf_pack_id values not found in inf_pack: "
+                f"{unknown_inf_pack_id_count}"
             )
 
         cur.execute(

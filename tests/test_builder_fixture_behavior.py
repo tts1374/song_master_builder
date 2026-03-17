@@ -173,6 +173,8 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
         assert "textage_id" in cols
         assert "title_qualifier" in cols
         assert "title_search_key" in cols
+        assert "inf_unlock_type" in cols
+        assert "inf_pack_id" in cols
         assert cols["textage_id"][3] == 1
         assert cols["title_qualifier"][3] == 1
         assert cols["title_search_key"][3] == 1
@@ -192,6 +194,12 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
             """
         ).fetchone()
         assert idx is not None
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type='index' AND name='idx_music_inf_pack_id';
+            """
+        ).fetchone() is not None
 
         alias_cols = {
             row[1]: row for row in conn.execute("PRAGMA table_info(music_title_alias);").fetchall()
@@ -229,6 +237,19 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
             WHERE type='index' AND name='uq_music_title_alias_textage_scope_alias';
             """
         ).fetchone() is not None
+
+        inf_pack_cols = {
+            row[1]: row for row in conn.execute("PRAGMA table_info(inf_pack);").fetchall()
+        }
+        assert "inf_pack_id" in inf_pack_cols
+        assert "pack_code" in inf_pack_cols
+        assert "pack_name" in inf_pack_cols
+        assert "display_order" in inf_pack_cols
+        assert "created_at" in inf_pack_cols
+        assert "updated_at" in inf_pack_cols
+        assert inf_pack_cols["pack_code"][3] == 1
+        assert inf_pack_cols["pack_name"][3] == 1
+        assert inf_pack_cols["display_order"][3] == 1
     finally:
         conn.close()
 

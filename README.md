@@ -25,8 +25,9 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 
 | テーブル | 主用途 | 主キー/一意制約 | 備考 |
 | --- | --- | --- | --- |
-| `music` | 曲単位のマスター情報 | `music_id` (PK), `textage_id` (UNIQUE) | `title_search_key`, `title_qualifier` を保持 |
+| `music` | 曲単位のマスター情報 | `music_id` (PK), `textage_id` (UNIQUE) | `title_search_key`, `title_qualifier`, `inf_unlock_type`, `inf_pack_id` を保持 |
 | `chart` | 譜面単位の情報 | `chart_id` (PK), `(music_id, play_style, difficulty)` (UNIQUE) | SP/DP 各難易度のレベル・ノーツ・全体/AC/INF 有効フラグ |
+| `inf_pack` | INFINITAS 楽曲パック定義 | `inf_pack_id` (PK), `pack_code` (UNIQUE) | `data/inf_pack.csv` を正本として投入 |
 | `music_title_alias` | タイトル同定用エイリアス | `alias_id` (PK), `(alias_scope, alias)` (UNIQUE), `(textage_id, alias_scope, alias)` (UNIQUE) | `official` / `manual` を保持 |
 | `meta` | 生成メタデータ | なし（単一最新行運用） | `schema_version`, `asset_updated_at`, `generated_at` |
 
@@ -44,6 +45,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `genre` | `TEXT` | NOT NULL |  | ジャンル |
 | `is_ac_active` | `INTEGER` | NOT NULL |  | AC 収録フラグ（0/1） |
 | `is_inf_active` | `INTEGER` | NOT NULL |  | INFINITAS 収録フラグ（0/1） |
+| `inf_unlock_type` | `TEXT` | NULL | `CHECK(inf_unlock_type IN ('initial', 'djp', 'bit', 'pack'))` | INFINITAS 解放種別（`is_inf_active=1` の曲のみ保持） |
+| `inf_pack_id` | `INTEGER` | NULL | `FOREIGN KEY -> inf_pack(inf_pack_id)` | `inf_unlock_type='pack'` のときのみ保持 |
 | `last_seen_at` | `TEXT` | NOT NULL |  | 最終確認時刻 |
 | `created_at` | `TEXT` | NOT NULL |  | 作成時刻 |
 | `updated_at` | `TEXT` | NOT NULL |  | 更新時刻 |
@@ -62,6 +65,17 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `is_ac_active` | `INTEGER` | NOT NULL |  | AC 収録有効フラグ（0/1） |
 | `is_inf_active` | `INTEGER` | NOT NULL |  | INFINITAS 収録有効フラグ（0/1） |
 | `last_seen_at` | `TEXT` | NOT NULL |  | 最終確認時刻 |
+| `created_at` | `TEXT` | NOT NULL |  | 作成時刻 |
+| `updated_at` | `TEXT` | NOT NULL |  | 更新時刻 |
+
+### `inf_pack` テーブル定義
+
+| カラム | 型 | NULL | 制約/既定値 | 説明 |
+| --- | --- | --- | --- | --- |
+| `inf_pack_id` | `INTEGER` | NOT NULL | `PRIMARY KEY AUTOINCREMENT` | パックID |
+| `pack_code` | `TEXT` | NOT NULL | `UNIQUE` | パック内部識別子（不変） |
+| `pack_name` | `TEXT` | NOT NULL |  | 公式表示名 |
+| `display_order` | `INTEGER` | NOT NULL |  | 公式収録曲ページのパック出現順（下部ほど小さい） |
 | `created_at` | `TEXT` | NOT NULL |  | 作成時刻 |
 | `updated_at` | `TEXT` | NOT NULL |  | 更新時刻 |
 
@@ -93,6 +107,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `idx_chart_filter` | `chart` | INDEX | `(play_style, difficulty, level, is_active)` |
 | `idx_chart_notes_active` | `chart` | INDEX | `(is_active, notes)` |
 | `idx_music_title_search_key` | `music` | INDEX | `(title_search_key)` |
+| `idx_music_inf_pack_id` | `music` | INDEX | `(inf_pack_id)` |
 | `idx_music_title_alias_textage_id` | `music_title_alias` | INDEX | `(textage_id)` |
 | `uq_music_title_alias_scope_alias` | `music_title_alias` | UNIQUE INDEX | `(alias_scope, alias)` |
 | `idx_music_title_alias_scope_alias` | `music_title_alias` | INDEX | `(alias_scope, alias)` |
@@ -109,7 +124,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `generated_at` | `string` | 必須 | UTC ISO8601 (`Z` suffix) |
 | `sha256` | `string` | 必須 | SQLite 実体の SHA-256 |
 | `byte_size` | `number` | 必須 | SQLite 実体サイズ（bytes） |
-| `source_hashes` | `object` | 任意 | Textage 3 ソース + AC/INF manual alias CSV の SHA-256 |
+| `source_hashes` | `object` | 任意 | Textage 3 ソース + AC/INF manual alias CSV + `inf_pack.csv` の SHA-256 |
 
 ### `source_hashes` サブキー
 
@@ -120,6 +135,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `actbl.js` | `string` | `actbl.js` の SHA-256 |
 | `manual_alias_ac_csv` | `string` | `music_alias_manual_ac_csv_path` で指定した CSV の SHA-256 |
 | `manual_alias_inf_csv` | `string` | `music_alias_manual_inf_csv_path` で指定した CSV の SHA-256 |
+| `inf_pack_csv` | `string` | `inf_pack_csv_path` で指定した CSV の SHA-256 |
 
 ### `latest.json` 整合性検証
 
@@ -137,6 +153,16 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | 最新判定 | タグ名ではなく `latest.json.file_name` を正とする |
 | 複数リリース/日 | タグは `YYYY-MM-DD`, `YYYY-MM-DD.N` で増える |
 | SQLite ファイル名 | 日付のみ（`.N` suffix は付かない） |
+
+## INFINITAS 解放情報取り込み（`src/sqlite_builder.py`）
+
+- 解放種別の正本は INFINITAS 公式収録曲ページ（<https://p.eagate.573.jp/game/infinitas/2/music/index.html>）です。
+- 楽曲パック定義の正本は `data/inf_pack.csv` です。
+- `music.inf_unlock_type` は `initial` / `djp` / `bit` / `pack` のみを保持します。
+- `music.inf_pack_id` は `inf_unlock_type='pack'` のときのみ設定されます。
+- 曲名同定は `music_title_alias.alias` の完全一致のみを使用し、`alias_scope='inf'` に限定します。
+- 不一致タイトルはコードで自動補正せず、`data/music_alias_manual_inf.csv` に manual alias を追加して解消します。
+- パック解決は公式ページ表示のパック名と `data/inf_pack.csv` の `pack_name` 完全一致のみで行います。
 
 ## AC スコア取り込み生成物（`src/ac_score_import.py`）
 
@@ -223,8 +249,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | --- | --- | --- |
 | 1 | `settings.yaml` 読み込み | 設定 |
 | 2 | 最新リリースから前回 SQLite / `latest.json` 取得（必要時） | 基準データ |
-| 3 | Textage 3 ソース取得 + AC/INF manual alias CSV ハッシュ計算 | `source_hashes` |
-| 4 | 5 ハッシュ完全一致ならスキップ | スキップ通知 |
+| 3 | Textage 3 ソース取得 + AC/INF manual alias CSV + `inf_pack.csv` ハッシュ計算 | `source_hashes` |
+| 4 | 全ハッシュ完全一致ならスキップ | スキップ通知 |
 | 5 | SQLite 更新生成 | `song_master_YYYY-MM-DD.sqlite` |
 | 6 | DB 制約/データ整合性検証 | DB 検証 |
 | 7 | `latest.json` 生成 + 実体突合 | `latest.json` |
@@ -241,6 +267,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `chart_id_missing_policy` | `error` | 旧 DB 比較で欠損時の動作（`error` / `warn`） |
 | `music_alias_manual_ac_csv_path` | `data/music_alias_manual_ac.csv` | AC 用手動エイリアス CSV パス |
 | `music_alias_manual_inf_csv_path` | `data/music_alias_manual_inf.csv` | INFINITAS 用手動エイリアス CSV パス |
+| `inf_pack_csv_path` | `data/inf_pack.csv` | INFINITAS 楽曲パック定義 CSV パス |
+| `inf_music_index_url` | `https://p.eagate.573.jp/game/infinitas/2/music/index.html` | INFINITAS 公式収録曲ページ URL |
 
 ### `github` 設定
 
@@ -248,8 +276,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | --- | --- | --- |
 | `owner` | `tts1374` | リポジトリ owner |
 | `repo` | `iidx_all_songs_master` | リポジトリ名 |
-| `upload_to_release` | `true` | `main.py` 内で公開まで実施するか |
-| `require_previous_release` | `true` | 前回リリース取得を必須にするか |
+| `upload_to_release` | `false` | `main.py` 内で公開まで実施するか |
+| `require_previous_release` | `false` | 前回リリース取得を必須にするか |
 | `asset_name` | `song_master.sqlite` | フォールバック用資産名 |
 
 ## 手動エイリアス CSV 仕様（`data/music_alias_manual_ac.csv` / `data/music_alias_manual_inf.csv`）
@@ -286,7 +314,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | --- | --- |
 | Python | 3.11+（CI は 3.11） |
 | 依存導入 | `pip install -r requirements.txt` |
-| 必須環境変数 | `GITHUB_TOKEN`（`main.py` 実行時） |
+| 必須環境変数 | なし（`github.upload_to_release=true` または `github.require_previous_release=true` のときのみ `GITHUB_TOKEN` が必要） |
 
 ### コマンド
 
@@ -295,6 +323,13 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | SQLite / `latest.json` 生成 | `python main.py` |
 | AC スコア同定レポート生成 | `python src/ac_score_import.py <AC_SCORE_CSV_PATH> --sqlite-path song_master.sqlite --report-path import_report.json --unmatched-csv-path unmatched_titles.csv` |
 | INF リソース同定レポート生成 | `python src/inf_score_import.py data/informations4.1.res data/musictable1.2.res --sqlite-path song_master.sqlite --report-path inf_import_report.json --unmatched-csv-path inf_unmatched_titles.csv` |
+
+### ローカル動作確認モード
+
+- 既定の `settings.yaml` はローカル向けに `github.upload_to_release=false` / `github.require_previous_release=false` です。
+- `GITHUB_TOKEN` 未設定でも `python main.py` は実行できます（公開・前回リリース取得は自動でスキップ）。
+- `DISCORD_WEBHOOK_URL` 未設定時は通知を送らず処理継続します。
+- 取り込みレポート系を通知なしで実行する場合は `--no-discord` を指定します。
 
 ## CI / リリース運用
 

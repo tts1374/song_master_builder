@@ -48,6 +48,8 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
         assert music_sql is not None
         music_sql_norm = _normalize_sql(music_sql[0])
         assert "textage_id text not null unique" in music_sql_norm
+        assert "inf_unlock_type text" in music_sql_norm
+        assert "inf_pack_id integer" in music_sql_norm
 
         chart_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='chart';"
@@ -65,9 +67,18 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
         assert "alias text not null" in alias_sql_norm
         assert "alias_type text not null" in alias_sql_norm
 
+        inf_pack_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='inf_pack';"
+        ).fetchone()
+        assert inf_pack_sql is not None
+        inf_pack_sql_norm = _normalize_sql(inf_pack_sql[0])
+        assert "pack_code text not null unique" in inf_pack_sql_norm
+
         music_cols = {row[1]: row for row in conn.execute("PRAGMA table_info(music);").fetchall()}
         assert music_cols["textage_id"][3] == 1
         assert music_cols["title_search_key"][3] == 1
+        assert "inf_unlock_type" in music_cols
+        assert "inf_pack_id" in music_cols
 
         idx = conn.execute(
             """

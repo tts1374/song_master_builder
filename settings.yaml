@@ -3,10 +3,12 @@ schema_version: "33"
 chart_id_missing_policy: "error"
 music_alias_manual_ac_csv_path: "data/music_alias_manual_ac.csv"
 music_alias_manual_inf_csv_path: "data/music_alias_manual_inf.csv"
+inf_pack_csv_path: "data/inf_pack.csv"
+inf_music_index_url: "https://p.eagate.573.jp/game/infinitas/2/music/index.html"
 
 github:
   owner: "tts1374"
   repo: "iidx_all_songs_master"
-  upload_to_release: true
-  require_previous_release: true
+  upload_to_release: false
+  require_previous_release: false
   asset_name: "song_master.sqlite"
