@@ -181,6 +181,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          date -u
+          curl -v -I -L --max-time 30 https://p.eagate.573.jp/game/infinitas/2/music/index.html || true
+          curl -v -L --max-time 30 -o /tmp/infinitas.html -w 'http_code=%{http_code}\nremote_ip=%{remote_ip}\ntime_total=%{time_total}\n' https://p.eagate.573.jp/game/infinitas/2/music/index.html || true
+          wc -c /tmp/infinitas.html || true
           python main.py
 
       - name: Run full tests

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
 from src.sqlite_builder import (
     apply_inf_unlock_information,
     ensure_schema,
+    fetch_inf_music_index_html,
     parse_inf_unlock_entries_from_music_index_html,
+    reset_all_music_active_flags,
     upsert_music,
 )
 
@@ -85,6 +88,52 @@ def test_parse_inf_unlock_entries_from_music_index_html_extracts_required_catego
     assert ("Song PACK", "pack", "楽曲パック vol.1( TEST PACK )") in {
         (entry.title, entry.unlock_type, entry.pack_name) for entry in entries
     }
+
+
+@pytest.mark.light
+def test_fetch_inf_music_index_html_retries_transient_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    attempts = {"count": 0}
+
+    class _Headers:
+        def get_content_charset(self):
+            return "utf-8"
+
+    class _Response:
+        headers = _Headers()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"ok"
+
+    def fake_urlopen(*_args, **_kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise HTTPError(
+                url="https://example.invalid/inf",
+                code=503,
+                msg="Service Unavailable",
+                hdrs=None,
+                fp=None,
+            )
+        return _Response()
+
+    monkeypatch.setattr("src.sqlite_builder.urllib_request.urlopen", fake_urlopen)
+
+    html = fetch_inf_music_index_html(
+        "https://example.invalid/inf",
+        max_attempts=2,
+        retry_sleep_sec=0,
+    )
+
+    assert html == "ok"
+    assert attempts["count"] == 2
 
 
 @pytest.mark.light
@@ -164,6 +213,65 @@ def test_apply_inf_unlock_information_updates_music_with_alias_exact_match(
         assert rows[2][1] == 0
         assert rows[2][2] is None
         assert rows[2][3] is None
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
+def test_apply_inf_unlock_information_preserves_existing_unlocks_when_fetch_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sqlite_path = tmp_path / "song_master.sqlite"
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        ensure_schema(conn)
+        _seed_music_row(conn, textage_id="T001", title="Song Initial", is_inf_active=1)
+        _seed_music_row(conn, textage_id="T002", title="Song Removed", is_inf_active=1)
+        conn.execute(
+            """
+            UPDATE music
+            SET inf_unlock_type = 'initial',
+                inf_pack_id = NULL
+            WHERE textage_id IN ('T001', 'T002')
+            """
+        )
+        conn.commit()
+
+        reset_all_music_active_flags(conn)
+        _seed_music_row(conn, textage_id="T001", title="Song Initial", is_inf_active=1)
+        conn.commit()
+
+        def raise_fetch_error(*_args, **_kwargs):
+            raise RuntimeError("failed to fetch INFINITAS music page after 3 attempts")
+
+        monkeypatch.setattr(
+            "src.sqlite_builder.fetch_inf_music_index_html",
+            raise_fetch_error,
+        )
+
+        report = apply_inf_unlock_information(
+            conn=conn,
+            inf_music_index_url="https://example.invalid/inf",
+            inf_pack_csv_path="",
+            inf_unlock_override_csv_path="",
+        )
+        conn.commit()
+
+        assert report["skipped"] is True
+        assert report["updated_music_rows"] == 0
+        assert report["cleared_inactive_rows"] == 1
+        rows = conn.execute(
+            """
+            SELECT textage_id, is_inf_active, inf_unlock_type, inf_pack_id
+            FROM music
+            ORDER BY textage_id
+            """
+        ).fetchall()
+        assert rows == [
+            ("T001", 1, "initial", None),
+            ("T002", 0, None, None),
+        ]
     finally:
         conn.close()
 

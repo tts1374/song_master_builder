@@ -9,6 +9,7 @@ import html
 import os
 import re
 import sqlite3
+import time
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
@@ -190,18 +191,37 @@ def _normalize_inf_pack_name(label: str) -> str:
 def fetch_inf_music_index_html(
     inf_music_index_url: str | None = None,
     timeout_sec: int = 30,
+    max_attempts: int = 3,
+    retry_sleep_sec: float = 5.0,
 ) -> str:
     """Fetch official INFINITAS music page HTML."""
     resolved_url = inf_music_index_url or DEFAULT_INF_MUSIC_INDEX_URL
+    attempts = max(1, int(max_attempts))
+    last_error: OSError | None = None
 
-    try:
-        with urllib_request.urlopen(resolved_url, timeout=timeout_sec) as response:
-            raw = response.read()
-            charset = response.headers.get_content_charset() or "utf-8"
-    except OSError as exc:
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib_request.urlopen(resolved_url, timeout=timeout_sec) as response:
+                raw = response.read()
+                charset = response.headers.get_content_charset() or "utf-8"
+            break
+        except OSError as exc:
+            last_error = exc
+            if attempt >= attempts:
+                raise RuntimeError(
+                    f"failed to fetch INFINITAS music page after {attempts} attempts: "
+                    f"{resolved_url}"
+                ) from exc
+            print(
+                "[inf-unlock] warning: failed to fetch INFINITAS music page "
+                f"(attempt={attempt}/{attempts}, url={resolved_url}, error={exc}); "
+                "retrying"
+            )
+            time.sleep(retry_sleep_sec)
+    else:
         raise RuntimeError(
             f"failed to fetch INFINITAS music page: {resolved_url}"
-        ) from exc
+        ) from last_error
 
     try:
         return raw.decode(charset, errors="strict")
@@ -592,7 +612,45 @@ def apply_inf_unlock_information(
 ) -> dict:
     """Apply INF unlock type/pack info to `music` from official and CSV authorities."""
     resolved_url = inf_music_index_url or DEFAULT_INF_MUSIC_INDEX_URL
-    page_html = fetch_inf_music_index_html(resolved_url)
+    try:
+        page_html = fetch_inf_music_index_html(resolved_url)
+    except RuntimeError as exc:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE music
+            SET inf_unlock_type = NULL,
+                inf_pack_id = NULL,
+                updated_at = ?
+            WHERE is_inf_active = 0
+              AND (inf_unlock_type IS NOT NULL OR inf_pack_id IS NOT NULL)
+            """,
+            (now_iso(),),
+        )
+        cleared_inactive_rows = int(cur.rowcount)
+        _validate_inf_unlock_integrity(conn)
+        print(
+            "[inf-unlock] warning: official INFINITAS music page unavailable; "
+            f"preserving existing unlock information: {exc}"
+        )
+        return {
+            "source_url": resolved_url,
+            "skipped": True,
+            "skip_reason": str(exc),
+            "cleared_inactive_rows": cleared_inactive_rows,
+            "parsed_entry_count": 0,
+            "assigned_textage_count": 0,
+            "updated_music_rows": 0,
+            "skipped_non_inf_active_rows": 0,
+            "unmatched_title_count": 0,
+            "unmatched_titles_top10": [],
+            "unresolved_pack_name_count": 0,
+            "unresolved_pack_names_top10": [],
+            "ambiguous_pack_name_count": 0,
+            "ambiguous_pack_names_top10": [],
+            "override_row_count": 0,
+            "inf_pack_seed": None,
+        }
     unlock_entries = parse_inf_unlock_entries_from_music_index_html(page_html)
     alias_map = _load_inf_alias_map(conn)
 
@@ -1213,8 +1271,6 @@ def reset_all_music_active_flags(conn: sqlite3.Connection):
     UPDATE music SET
         is_ac_active = 0,
         is_inf_active = 0,
-        inf_unlock_type = NULL,
-        inf_pack_id = NULL,
         updated_at = ?
     """,
         (now,),
